@@ -56,6 +56,18 @@ export function floorRange(lo: number, hi: number): { lo: number; hi: number } {
   return { lo: mid - minSpan / 2, hi: mid + minSpan / 2 };
 }
 
+const SUPERSCRIPT: Record<string, string> = {
+  '-': '\u207b', '0': '\u2070', '1': '\u00b9', '2': '\u00b2', '3': '\u00b3', '4': '\u2074',
+  '5': '\u2075', '6': '\u2076', '7': '\u2077', '8': '\u2078', '9': '\u2079',
+};
+
+/** A power of ten as 10 with a superscript exponent, e.g. 10⁻⁴; anything else as fmtValue. */
+export const fmtPower = (v: number): string => {
+  const e = Math.log10(v);
+  if (Math.abs(e - Math.round(e)) > 1e-9) return fmtValue(v);
+  return '10' + String(Math.round(e)).replace(/./g, (c) => SUPERSCRIPT[c] ?? c);
+};
+
 /** Vertical colorbar drawn on a small canvas, with min/max labels. */
 export class Colorbar {
   #canvas: HTMLCanvasElement;
@@ -74,7 +86,8 @@ export class Colorbar {
     container.append(this.#maxLabel, this.#canvas, this.#minLabel);
   }
 
-  update(cmap: ColormapFunc, vmin: number, vmax: number): void {
+  /** `log`: the colormap runs over log10 of the values, and the labels are powers of ten. */
+  update(cmap: ColormapFunc, vmin: number, vmax: number, log = false): void {
     const ctx = this.#canvas.getContext('2d');
     if (!ctx) return;
     const h = this.#canvas.height;
@@ -84,7 +97,8 @@ export class Colorbar {
       ctx.fillStyle = `rgb(${r},${g},${b})`;
       ctx.fillRect(0, y, this.#canvas.width, 1);
     }
-    this.#maxLabel.textContent = fmtValue(vmax);
-    this.#minLabel.textContent = fmtValue(vmin);
+    const fmt = log ? fmtPower : fmtValue;
+    this.#maxLabel.textContent = fmt(vmax);
+    this.#minLabel.textContent = fmt(vmin);
   }
 }

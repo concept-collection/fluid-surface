@@ -112,6 +112,8 @@
         <button id="play" class="primary">Play</button>
         <button id="reset">Reset</button>
         <label>colour <select id="field"></select></label>
+        <label title="Fixed ends of the colour range; blank is automatic: every value since Reset">range <input id="cmin" type="number" step="any" placeholder="auto" /> to <input id="cmax" type="number" step="any" placeholder="auto" /></label>
+        <label><input id="clog" type="checkbox" /> log</label>
         <label><input id="arrows" type="checkbox" checked /> velocity arrows</label>
         <label title="Line integral convolution of the tangential velocity, in screen space, over the colouring"><input id="lic" type="checkbox" /> streamlines</label>
         <label>lmax <select id="band"></select></label>

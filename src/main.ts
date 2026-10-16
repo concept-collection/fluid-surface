@@ -24,14 +24,19 @@ import ref32 from './fluid/reference/fluid_run-perturbed_sphere-r0.4-L32-dt0.005
 
 const RE = 1;
 const BE = 2;
-type Field = 'H' | 'K' | 'sqrtg' | 'speed' | 'un';
+type Field = 'H' | 'K' | 'sqrtg' | 'speed' | 'un' | 'pu';
 const FIELDS: { key: Field; label: string }[] = [
   { key: 'H', label: 'mean curvature H' },
   { key: 'K', label: 'Gaussian curvature K' },
   { key: 'sqrtg', label: 'area element' },
   { key: 'speed', label: 'speed |u|' },
   { key: 'un', label: 'normal velocity u . n (outward)' },
+  { key: 'pu', label: 'tangential speed |Pu|' },
 ];
+/** Fields that open on a log scale, as Krause & Voigt draw |Pu|. */
+const LOG_FIELDS = new Set<Field>(['pu']);
+/** On a log scale with an automatic bottom: at most this many decades below the top. */
+const LOG_DECADES = 6;
 const BANDS = [12, 16, 24, 32];
 const DTS = [0.0025, 0.005, 0.01, 0.02];
 
@@ -45,6 +50,9 @@ const stats = $<HTMLDivElement>('stats');
 const err = $<HTMLDivElement>('err');
 const sphereBox = $<HTMLDivElement>('sphere');
 const arrowsBox = $<HTMLInputElement>('arrows');
+const cminInput = $<HTMLInputElement>('cmin');
+const cmaxInput = $<HTMLInputElement>('cmax');
+const clogBox = $<HTMLInputElement>('clog');
 const licBox = $<HTMLInputElement>('lic');
 const refFile = $<HTMLInputElement>('ref-file');
 const refNote = $<HTMLSpanElement>('ref-note');
@@ -128,6 +136,10 @@ interface Run {
   /** The last frame's numbers, for the stats line. */
   last: { ekin: number; eh: number; area: number; volume: number; its: number; ms: number; converged: boolean };
   field: Float32Array | null;
+  /** Every value the field has taken since the run or the field last changed
+   *  (and the smallest positive one), the automatic colour range: it only
+   *  widens, so the colours mean the same thing all run long. */
+  range: { lo: number; hi: number; pos: number } | null;
   volume0: number;
   /** sin(theta) of each latitude ring, for spacing the arrows. */
   st: Float64Array;
@@ -162,6 +174,7 @@ async function build(lmax: number, dt: number): Promise<void> {
     step: 0,
     last: { ekin: 0, eh: 0, area: 0, volume: 0, its: 0, ms: 0, converged: true },
     field: null,
+    range: null,
     volume0: 0,
     st: Float64Array.from(ct, (c) => Math.sqrt(1 - c * c)),
     coords: new Float32Array(3 * nlat * nphi),
@@ -183,6 +196,7 @@ async function reset(): Promise<void> {
   const zero = () => new Float32Array((cfg.lmax + 1) * (cfg.lmax + 2));
   r.state = { U: [zero(), zero(), zero()], P: zero(), lam: 0 };
   r.step = 0;
+  r.range = null;
   chartEh.clear();
   chartEkin.clear();
   updateReference();
@@ -213,6 +227,7 @@ async function fieldValues(f: Field): Promise<Float32Array> {
   if (f === 'H' || f === 'K' || f === 'sqrtg') return r.ms.geometryField(f);
   const v = r.vel!;
   if (f === 'un') return v.un;
+  if (f === 'pu') return v.t[0].map((t1, k) => Math.hypot(t1, v.t[1][k], v.t[2][k]));
   return v.un.map((un, k) => Math.hypot(v.t[0][k], v.t[1][k], v.t[2][k], un));
 }
 
@@ -255,16 +270,33 @@ function draw(): void {
   if (!r || !r.field) return;
   r.scene.updatePositions(r.positions);
   fillFieldValues(r.values, r.field, r.topo);
-  let lo = Infinity;
-  let hi = -Infinity;
+  let { lo, hi, pos } = r.range ?? { lo: Infinity, hi: -Infinity, pos: Infinity };
   for (const x of r.field) {
     lo = Math.min(lo, x);
     hi = Math.max(hi, x);
+    if (x > 0) pos = Math.min(pos, x);
   }
-  const shown = floorRange(lo, hi);
-  fillColors(r.colors, r.values, shown.lo, shown.hi, cmap);
+  r.range = { lo, hi, pos };
+  // The viewer's min and max where given (positive ones only on a log scale), else automatic.
+  const log = clogBox.checked;
+  const given = (el: HTMLInputElement) => {
+    const v = el.value.trim() === '' ? NaN : Number(el.value);
+    return Number.isFinite(v) && (!log || v > 0) ? v : null;
+  };
+  if (log) {
+    const top = given(cmaxInput) ?? (hi > 0 ? hi : 1);
+    const bottom = given(cminInput) ?? Math.max(Math.min(pos, top), top * 10 ** -LOG_DECADES);
+    // Zero and negative values go to the bottom of the range.
+    for (let k = 0; k < r.values.length; k++) r.values[k] = Math.log10(Math.max(r.values[k], 1e-30));
+    fillColors(r.colors, r.values, Math.log10(bottom), Math.log10(top), cmap);
+    colorbar.update(cmap, bottom, top, true);
+  } else {
+    const auto = floorRange(lo, hi);
+    const shown = { lo: given(cminInput) ?? auto.lo, hi: given(cmaxInput) ?? auto.hi };
+    fillColors(r.colors, r.values, shown.lo, shown.hi, cmap);
+    colorbar.update(cmap, shown.lo, shown.hi);
+  }
   r.scene.updateColors(r.colors);
-  colorbar.update(cmap, shown.lo, shown.hi);
   const arrows = drawArrows();
   drawStreamlines();
   const L = r.last;
@@ -413,12 +445,19 @@ async function start(): Promise<void> {
     void paused(async () => {
       if (!run) return;
       run.field = await fieldValues(fieldSel.value as Field);
+      run.range = null;
+      // A range set for one field means nothing for the next.
+      cminInput.value = '';
+      cmaxInput.value = '';
+      clogBox.checked = LOG_FIELDS.has(fieldSel.value as Field);
       draw();
     }),
   );
   $<HTMLButtonElement>('view').addEventListener('click', () => run?.scene.resetCamera());
   arrowsBox.addEventListener('change', draw);
   licBox.addEventListener('change', draw);
+  for (const el of [cminInput, cmaxInput]) el.addEventListener('input', draw);
+  clogBox.addEventListener('change', draw);
   refFile.addEventListener('change', async () => {
     const file = refFile.files?.[0];
     if (!file) return;
