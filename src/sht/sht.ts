@@ -784,12 +784,18 @@ export async function requestShtDevice(): Promise<GPUDevice> {
   // than by a default.
   const maxStorage = adapter.limits.maxStorageBufferBindingSize;
   const maxBuffer = adapter.limits.maxBufferSize;
+  // A fused element-wise kernel binds every array its expression reads, and
+  // the surface geometry (lib/geometry.m) reads up to 7 per line, more than
+  // WebGPU's default of 8 bindings leaves room for. Ask for what the adapter
+  // has (16 on Dawn/Vulkan; desktop browsers commonly report 8 to 31).
+  const maxStorageBuffers = adapter.limits.maxStorageBuffersPerShaderStage;
   return adapter.requestDevice({
     requiredFeatures: features,
     requiredLimits: {
       maxComputeWorkgroupStorageSize: wgStorage,
       maxStorageBufferBindingSize: maxStorage,
       maxBufferSize: maxBuffer,
+      maxStorageBuffersPerShaderStage: maxStorageBuffers,
     },
   });
 }

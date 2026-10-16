@@ -10,6 +10,7 @@
 import { requestShtDevice } from '../src/sht/sht.ts';
 import { installWebGpu, errMsg, NO_ADAPTER_HINT } from './nodeWebGpu.ts';
 import { sphtorChecks } from '../test/sphtorChecks.ts';
+import { geometryChecks } from '../test/geometryChecks.ts';
 
 let failures = 0;
 const check = (name: string, ok: boolean, detail: string): void => {
@@ -37,6 +38,7 @@ try {
 console.log(`fluid-surface tests — ${runtime}\n`);
 
 await sphtorChecks(device, check, log);
+await geometryChecks(device, check, log);
 
 console.log(failures === 0 ? '\nAll tests passed.' : `\n${failures} failed.`);
 process.exit(failures === 0 ? 0 : 1);

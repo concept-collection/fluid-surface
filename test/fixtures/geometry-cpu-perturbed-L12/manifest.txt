@@ -1,0 +1,8 @@
+scalar lmax 12
+scalar lmax_f 24
+scalar nlat_f 26
+scalar nphi_f 64
+scalar r0 0.40000000000000002
+array X complex128 273 3,91
+array ct float64 26 26
+array geometry float64 26624 16,64,26
