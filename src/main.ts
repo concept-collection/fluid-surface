@@ -15,7 +15,7 @@ import { formatProfile, profileStep } from './fluid/profile.ts';
 import { SphereScene } from './render/SphereScene.ts';
 import { buildTopology, fillColors, fillFieldValues, fillPositions, type SphereMeshTopology } from './render/sphereMesh.ts';
 import { colormaps } from './render/colormaps.ts';
-import { Colorbar, floorRange } from './render/colorbar.ts';
+import { Colorbar, floorRange, fmtPower, fmtValue } from './render/colorbar.ts';
 import { LineChart } from './render/lineChart.ts';
 import { arrowSegments } from './render/arrows.ts';
 import modelSource from '../models/stokes.m?raw';
@@ -50,8 +50,8 @@ const stats = $<HTMLDivElement>('stats');
 const err = $<HTMLDivElement>('err');
 const sphereBox = $<HTMLDivElement>('sphere');
 const arrowsBox = $<HTMLInputElement>('arrows');
-const cminInput = $<HTMLInputElement>('cmin');
-const cmaxInput = $<HTMLInputElement>('cmax');
+const cminSel = $<HTMLSelectElement>('cmin');
+const cmaxSel = $<HTMLSelectElement>('cmax');
 const clogBox = $<HTMLInputElement>('clog');
 const licBox = $<HTMLInputElement>('lic');
 const refFile = $<HTMLInputElement>('ref-file');
@@ -107,9 +107,32 @@ function updateReference(): void {
   chartEkin.setReference(ref && { ts: ref.t, ys: ref.ekin }, label);
 }
 
+/**
+ * The choices for the colour range's ends, both back to auto: powers of ten on
+ * a log scale, else 0 and 1, 2, 5 times powers of ten of either sign.
+ */
+function fillRangeChoices(): void {
+  let values: number[];
+  if (clogBox.checked) {
+    values = Array.from({ length: 11 }, (_, i) => 10 ** (i - 8));
+  } else {
+    const mags = [-3, -2, -1, 0, 1].flatMap((e) => [1, 2, 5].map((m) => m * 10 ** e));
+    values = [...mags.map((v) => -v).reverse(), 0, ...mags];
+  }
+  // Rounded through toPrecision so 10 ** -3 reads 0.001, not 0.0010000000000000002.
+  values = values.map((v) => Number(v.toPrecision(3)));
+  for (const sel of [cminSel, cmaxSel]) {
+    sel.replaceChildren(new Option('auto', 'auto'));
+    for (const v of values) sel.add(new Option(clogBox.checked ? fmtPower(v) : fmtValue(v), String(v)));
+    sel.value = 'auto';
+  }
+}
+
 for (const f of FIELDS) fieldSel.add(new Option(f.label, f.key));
 for (const b of BANDS) bandSel.add(new Option(String(b), String(b)));
 for (const d of DTS) dtSel.add(new Option(String(d), String(d)));
+fieldSel.value = 'pu';
+fillRangeChoices();
 bandSel.value = '16';
 dtSel.value = '0.005';
 $<HTMLPreElement>('source').textContent = modelSource;
@@ -277,22 +300,21 @@ function draw(): void {
     if (x > 0) pos = Math.min(pos, x);
   }
   r.range = { lo, hi, pos };
-  // The viewer's min and max where given (positive ones only on a log scale), else automatic.
+  // The viewer's min and max where chosen, else automatic.
   const log = clogBox.checked;
-  const given = (el: HTMLInputElement) => {
-    const v = el.value.trim() === '' ? NaN : Number(el.value);
-    return Number.isFinite(v) && (!log || v > 0) ? v : null;
-  };
+  const given = (el: HTMLSelectElement) => (el.value === 'auto' ? null : Number(el.value));
   if (log) {
-    const top = given(cmaxInput) ?? (hi > 0 ? hi : 1);
-    const bottom = given(cminInput) ?? Math.max(Math.min(pos, top), top * 10 ** -LOG_DECADES);
+    const top = given(cmaxSel) ?? (hi > 0 ? hi : 1);
+    // At rest nothing is positive, or below the top: then the full LOG_DECADES.
+    const floor = top * 10 ** -LOG_DECADES;
+    const bottom = given(cminSel) ?? (pos < top ? Math.max(pos, floor) : floor);
     // Zero and negative values go to the bottom of the range.
     for (let k = 0; k < r.values.length; k++) r.values[k] = Math.log10(Math.max(r.values[k], 1e-30));
     fillColors(r.colors, r.values, Math.log10(bottom), Math.log10(top), cmap);
     colorbar.update(cmap, bottom, top, true);
   } else {
     const auto = floorRange(lo, hi);
-    const shown = { lo: given(cminInput) ?? auto.lo, hi: given(cmaxInput) ?? auto.hi };
+    const shown = { lo: given(cminSel) ?? auto.lo, hi: given(cmaxSel) ?? auto.hi };
     fillColors(r.colors, r.values, shown.lo, shown.hi, cmap);
     colorbar.update(cmap, shown.lo, shown.hi);
   }
@@ -447,17 +469,19 @@ async function start(): Promise<void> {
       run.field = await fieldValues(fieldSel.value as Field);
       run.range = null;
       // A range set for one field means nothing for the next.
-      cminInput.value = '';
-      cmaxInput.value = '';
       clogBox.checked = LOG_FIELDS.has(fieldSel.value as Field);
+      fillRangeChoices();
       draw();
     }),
   );
   $<HTMLButtonElement>('view').addEventListener('click', () => run?.scene.resetCamera());
   arrowsBox.addEventListener('change', draw);
   licBox.addEventListener('change', draw);
-  for (const el of [cminInput, cmaxInput]) el.addEventListener('input', draw);
-  clogBox.addEventListener('change', draw);
+  for (const el of [cminSel, cmaxSel]) el.addEventListener('change', draw);
+  clogBox.addEventListener('change', () => {
+    fillRangeChoices();
+    draw();
+  });
   refFile.addEventListener('change', async () => {
     const file = refFile.files?.[0];
     if (!file) return;
