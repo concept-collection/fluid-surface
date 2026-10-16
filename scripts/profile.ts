@@ -3,7 +3,9 @@
  * desktop WebGPU (src/fluid/profile.ts). Steps from rest, profiling the last
  * of a few so GMRES's iteration count is typical.
  *
- *   npx vite-node scripts/profile.ts -- --lmax 32 --steps 5
+ *   npx vite-node scripts/profile.ts -- --lmax 32 --steps 5 [--device]
+ *
+ * --device keeps GMRES's basis on the GPU (src/fluid/deviceGmres.ts).
  */
 import { installWebGpu } from './nodeWebGpu.ts';
 import { requestShtDevice } from '../src/sht/sht.ts';
@@ -18,11 +20,12 @@ const arg = (name: string, dflt: string): string => {
 const lmax = Number(arg('lmax', '32'));
 const steps = Number(arg('steps', '5'));
 const dt = Number(arg('dt', '0.005'));
+const onGpu = process.argv.includes('--device');
 
 await installWebGpu();
 const device = await requestShtDevice();
 const ms = await MovingStokes.create(device, lmax, {
-  re: 1, be: 2, volume: true, dt, gmres: { tol: 1e-6, restart: 200, maxCycles: 4 },
+  re: 1, be: 2, volume: true, dt, gmres: { tol: 1e-6, restart: 200, maxCycles: 4, device: onGpu },
 });
 const cfg = productConfig(lmax);
 ms.setSurface(perturbedSphere(cfg, lmax, 0.4));
@@ -30,5 +33,5 @@ const zero = () => new Float32Array((cfg.lmax + 1) * (cfg.lmax + 2));
 let state: FluidState = { U: [zero(), zero(), zero()], P: zero(), lam: 0 };
 for (let k = 1; k < steps; k++) state = (await ms.step(state)).state;
 const { profile } = await profileStep(device, ms, state);
-console.log(`band ${lmax}, product band ${cfg.lmax} on ${cfg.nlat} x ${cfg.nphi}, step ${steps}, timestamp queries: ${device.features.has('timestamp-query')}`);
+console.log(`GMRES on the ${onGpu ? 'GPU' : 'host'}, band ${lmax}, product band ${cfg.lmax} on ${cfg.nlat} x ${cfg.nphi}, step ${steps}, timestamp queries: ${device.features.has('timestamp-query')}`);
 for (const line of formatProfile(profile)) console.log(line);

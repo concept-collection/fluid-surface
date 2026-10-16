@@ -78,7 +78,7 @@ let playing = false;
 async function build(lmax: number, dt: number): Promise<void> {
   stats.textContent = `compiling the solver for band ${lmax}...`;
   const ms = await MovingStokes.create(device, lmax, {
-    re: RE, be: BE, volume: true, dt, gmres: { tol: 1e-6, restart: 200, maxCycles: 4 },
+    re: RE, be: BE, volume: true, dt, gmres: { tol: 1e-6, restart: 200, maxCycles: 4, device: true },
   });
   const { nlat, nphi } = ms.cfg;
   const phi = Float64Array.from({ length: nphi }, (_, j) => (2 * Math.PI * j) / nphi);

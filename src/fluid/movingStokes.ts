@@ -24,6 +24,7 @@ import { chartWeights, spectralMasks, workingIndices } from './spectra.ts';
 import { sphereBlockTables } from './sphereBlocks.ts';
 import { BL_FIELDS, DER_FIELDS, GEO_FIELDS, GRID_FIELDS, MSK_FIELDS, TAB_FIELDS, into, structOf } from './structs.ts';
 import { gmres, type GmresOptions } from './gmres.ts';
+import { DeviceGmres } from './deviceGmres.ts';
 import type { StepInfo } from './staticStokes.ts';
 import geometrySource from '../../lib/geometry.m?raw';
 import posderivsSource from '../../lib/posderivs.m?raw';
@@ -66,6 +67,7 @@ export class MovingStokes {
   #device!: GPUDevice;
   #idx: Int32Array;
   #nlm2: number;
+  #dgmres: DeviceGmres | null = null;
 
   private constructor(lmax: number, cfg: ShtConfig, prm: MovingStokesParams, sht: ShtPlan, deriv: DerivPlan,
     host: HostBuffers, fns: MovingStokes['fns']) {
@@ -215,18 +217,58 @@ export class MovingStokes {
     return this.pack([R1, R2, R3, RP], RL[0]);
   }
 
+  /** GMRES on the GPU around the compiled matvec: a vector is Z1..Z4 and Z5
+   *  end to end, weighted to the working band's unknowns. */
+  #deviceGmres(): DeviceGmres {
+    if (this.#dgmres) return this.#dgmres;
+    const mv = this.fns.matvec;
+    const seg = (name: string, count: number) => ({ buffer: mv.buffer(name)!, count });
+    const L = this.#nlm2;
+    const wt = new Float32Array(4 * L + 1);
+    for (let f = 0; f < 4; f++) for (const i of this.#idx) wt[f * L + i] = 1;
+    wt[4 * L] = 1;
+    this.#dgmres = DeviceGmres.create(this.#device, {
+      inputs: [seg('Z1', L), seg('Z2', L), seg('Z3', L), seg('Z4', L), seg('Z5', 1)],
+      outputs: [seg('R1', L), seg('R2', L), seg('R3', L), seg('RP', L), seg('RL', 1)],
+      encode: (enc) => mv.encode(enc),
+    }, wt, { restart: this.prm.gmres.restart });
+    return this.#dgmres;
+  }
+
+  /** Product-band spectra and the multiplier end to end, as DeviceGmres lays out a vector. */
+  #flat(fields: ArrayLike<number>[], lam: number): Float32Array {
+    const L = this.#nlm2;
+    const out = new Float32Array(fields.length * L + 1);
+    fields.forEach((f, j) => out.set(f, j * L));
+    out[fields.length * L] = lam;
+    return out;
+  }
+
+  /** Solves the step's system: on the GPU, or with the host's GMRES around apply. */
+  async #solve(b: Float64Array, s: FluidState): Promise<{ x: Float32Array[]; lam: number; info: StepInfo }> {
+    if (this.prm.gmres.device) {
+      const dg = this.#deviceGmres();
+      const info = await dg.solve(this.#flat(this.unpack(b, 4), b[b.length - 1]), this.#flat([...s.U, s.P], s.lam), this.prm.gmres);
+      const x = await dg.readX();
+      const L = this.#nlm2;
+      return { x: [0, 1, 2, 3].map((j) => x.slice(j * L, (j + 1) * L)), lam: x[4 * L], info };
+    }
+    const res = await gmres((z) => this.apply(z), b, this.pack([...s.U, s.P], s.lam), this.prm.gmres);
+    return {
+      x: this.unpack(res.x, 4), lam: res.x[res.x.length - 1],
+      info: { iterations: res.iterations, converged: res.converged, relResid: res.relResid },
+    };
+  }
+
   /** One BDF-1 step; the surface moves on the GPU. */
   async step(s: FluidState): Promise<{ state: FluidState; info: StepInfo }> {
     const b = await this.prepare(s.U);
-    const res = await gmres((z) => this.apply(z), b, this.pack([...s.U, s.P], s.lam), this.prm.gmres);
-    const [U1, U2, U3, P1] = this.unpack(res.x, 4);
-    const lam = this.prm.volume ? res.x[res.x.length - 1] : 0;
+    const res = await this.#solve(b, s);
+    const [U1, U2, U3, P1] = res.x;
+    const lam = this.prm.volume ? res.lam : 0;
     [U1, U2, U3].forEach((u, c) => this.#host.upload(`U${c + 1}`, u));
     this.fns.advance.run();
-    return {
-      state: { U: [U1, U2, U3], P: P1, lam },
-      info: { iterations: res.iterations, converged: res.converged, relResid: res.relResid },
-    };
+    return { state: { U: [U1, U2, U3], P: P1, lam }, info: res.info };
   }
 
   /** The surface's position on the grid (x, y, z, each nlat * nphi). */
@@ -253,6 +295,7 @@ export class MovingStokes {
 
   destroy(): void {
     for (const f of Object.values(this.fns)) f.destroy();
+    this.#dgmres?.destroy();
     this.#host.destroy();
     this.#deriv.destroy();
     this.#sht.destroy();

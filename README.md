@@ -207,7 +207,21 @@ A step is the operator's setup and right-hand side, then GMRES on the host, each
 
 The 126 element-wise kernels take most of the rest of the GPU time, and the 43 coefficient shuffles little. The parts of an application do not add up at band 32: inside GMRES the wait for the result is 5 to 9 ms from run to run, where a lone run takes 3 to 4 ms from submit to readback. The cause is not established; presumably it is in how Dawn's Node binding resolves `mapAsync`, since at band 64, where the GPU time dominates, the two agree. In the app's built-in browser (Chromium, with the page hidden, which throttles it), a band 32 step took 410 to 430 ms: the matvec's GPU time was the same, recording was cheaper (0.2 to 0.4 ms), a bare readback took 1 to 3 ms, and GMRES's host time was 130 to 150 ms, of which its arithmetic is about 55 ms.
 
-Two things follow. First, the matvec keeps the GPU busy for only 30 to 40% of a step at bands 16 and 32 (120 of 300 ms at band 32); the rest is the per-iteration round trip and GMRES on the host, whose cost grows as the iteration count squared times the vector length and is a quarter of the step at band 64. Keeping the Krylov basis on the GPU, as the C++ solver's native GMRES does, would remove both, at the price of orthogonalizing in fp32. Second, of the GPU time, the transforms are the larger part; ten of the 37 are the grid round trip of the conversion to Q, S, T (step 4a), which coefficient recurrences would avoid.
+Two things follow. First, the matvec keeps the GPU busy for only 30 to 40% of a step at bands 16 and 32 (120 of 300 ms at band 32); the rest is the per-iteration round trip and GMRES on the host, whose cost grows as the iteration count squared times the vector length and is a quarter of the step at band 64. Keeping the Krylov basis on the GPU, as the C++ solver's native GMRES does, removes both, at the price of orthogonalizing in fp32 (next section). Second, of the GPU time, the transforms are the larger part; ten of the 37 are the grid round trip of the conversion to Q, S, T (step 4a), which coefficient recurrences would avoid.
+
+### GMRES on the GPU
+
+[`src/fluid/deviceGmres.ts`](src/fluid/deviceGmres.ts) keeps the Krylov basis, the orthogonalization and the solution on the GPU, in fp32, around the compiled matvec. A vector is the matvec's inputs end to end (four product-band spectra and the multiplier), weighted 1 on the working band's unknowns and 0 elsewhere, so its inner product is that of the host's packed vectors. Each iteration copies basis vector k into the matvec's inputs, records the matvec, and orthogonalizes its result by classical Gram-Schmidt run twice: all k + 1 inner products in one dispatch, then one update, twice, then the norm and the new basis vector, six dispatches whatever k is. The host keeps the f64 part, the Givens rotations, the residual estimate and the small least-squares solve, and reads the Hessenberg columns back in batches: a batch of iterations is recorded into one submission, sized by the number of iterations the residual estimate's recent rate predicts are left (at most 8), so the solve overshoots its stopping point by little. These kernels are hand-written WGSL rather than numbl, since their shapes change with the iteration number, which a compiled plan cannot express; they play the part a library such as PETSc plays for the C++. The page and `scripts/kv.ts --device` use it; the static mode still runs GMRES on the host.
+
+On Dawn (Node, Intel Iris Xe), the same step as in the table above:
+
+| | band 32 | band 64 |
+|---|---:|---:|
+| step, GMRES on the host | 390 ms | 1.31 s |
+| step, GMRES on the GPU | 178 ms | 0.97 s |
+| per iteration on the GPU, of which the matvec | 4.6 ms, 3.3 | 13.2 ms, 9.5 |
+
+The iteration counts are unchanged (18.1 per step for the band 12 check, 34.6 for Krause & Voigt at band 32), and so is the agreement with the C++: the step checks pass with GMRES on the GPU, and the band 32 run of 100 steps matches `fluid_run`'s energies to 7.4e-7 and its final position to 5.0e-7, at 0.19 s per step instead of 0.29 s. In the app's browser pane, a band 32 step went from 410 to 430 ms to 210 to 235 ms. At band 64 the orthogonalization costs 3.7 ms per iteration: its inner products run one workgroup per basis vector, which leaves most of an integrated GPU idle for small k, and splitting each across several workgroups is the obvious next step.
 
 ## Where numbl needed help
 
@@ -225,7 +239,7 @@ This list records each place the MATLAB could not say what was meant, or the com
 - **Reductions are statements.** `dot` must be its own statement on named arrays; `dot(a, w) / dot(b, w)` in one line does not compile, since the planner sees the grid-sized arguments inside a scalar kernel.
 - **One band per function.** A function runs on one grid and one band. Keeping every spectral field on the product band, with masks for truncation and filters (see the static mode above), works around it at some cost.
 - **No shifts in the order m** (step 4a). Multiplying by x or y on the sphere couples m to m +- 1, which none of the coefficient shuffles does; the conversion to Q, S, T goes through the grid instead, at the cost of ten transforms.
-- **GMRES is hand-written** (step 3), in TypeScript on the host, because its restarts and convergence test need the host in the loop, which a compiled plan (a fixed list of GPU operations) does not have.
+- **GMRES is hand-written** (step 3), in TypeScript on the host, because its restarts and convergence test need the host in the loop, which a compiled plan (a fixed list of GPU operations) does not have. Its GPU version ([`src/fluid/deviceGmres.ts`](src/fluid/deviceGmres.ts)) is hand-written WGSL for the same reason: its kernels depend on the iteration number.
 
 ## Tests
 

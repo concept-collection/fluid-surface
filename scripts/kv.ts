@@ -5,7 +5,7 @@
  * compared with a run of the C++ solver's fluid_run with the same settings
  * (its diagnostics.csv, and the position at the final snapshot).
  *
- *   npx vite-node scripts/kv.ts -- --lmax 32 --dt 0.005 --T 0.5 --cpp <fluid_run save_dir>
+ *   npx vite-node scripts/kv.ts -- --lmax 32 --dt 0.005 --T 0.5 --cpp <fluid_run save_dir> [--device]
  *
  * fluid_run -example perturbed_sphere -r0 0.4 -Re 1 -Be 2 -order 1 -lmax 32 -dt 0.005 -T 0.5
  *   -relabel_every 0 -frames 0 -snapshot_times 0.5 -save_dir <dir>
@@ -30,11 +30,13 @@ const re = Number(arg('Re', '1'));
 const be = Number(arg('Be', '2'));
 const cpp = arg('cpp', '');
 const out = arg('out', `tmp/kv_L${lmax}.csv`);
+// GMRES with its basis on the GPU (src/fluid/deviceGmres.ts).
+const onGpu = process.argv.includes('--device');
 
 await installWebGpu();
 const device = await requestShtDevice();
 const ms = await MovingStokes.create(device, lmax, {
-  re, be, volume: true, dt, gmres: { tol: 1e-6, restart: 200, maxCycles: 4 },
+  re, be, volume: true, dt, gmres: { tol: 1e-6, restart: 200, maxCycles: 4, device: onGpu },
 });
 const cfg = productConfig(lmax);
 ms.setSurface(perturbedSphere(cfg, lmax, r0));

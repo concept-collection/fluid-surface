@@ -34,7 +34,8 @@ export interface StepProfile {
    *  and submitting the matvec, waiting for its result to be read back,
    *  packing the result. */
   phases: { upload: number; record: number; wait: number; pack: number };
-  /** Host time in GMRES itself over the step (orthogonalization, updates), ms. */
+  /** Host time in GMRES itself over the step (orthogonalization, updates);
+   *  with GMRES on the GPU, the whole solve. ms. */
   gmresHost: number;
   /** GPU time of one matvec, from back-to-back runs, ms. */
   matvecGpu: number;
@@ -167,7 +168,10 @@ export async function profileStep(device: GPUDevice, ms: MovingStokes, state: Fl
 export function formatProfile(p: StepProfile): string[] {
   const f = (x: number) => x.toFixed(2);
   const its = p.iterations;
-  const lines = [
+  const onGpu = p.apply === 0;
+  const lines = onGpu ? [
+    `step ${f(p.step)} ms: prepare ${f(p.prepare)}, GMRES on the GPU ${f(p.gmresHost)} for ${its} iterations (${f(p.gmresHost / Math.max(its, 1))} each)`,
+  ] : [
     `step ${f(p.step)} ms: prepare ${f(p.prepare)}, ${its} matvec applications ${f(p.apply * its)} (${f(p.apply)} each), GMRES on the host ${f(p.gmresHost)}`,
     `one application ${f(p.apply)} ms in GMRES: upload ${f(p.phases.upload)}, record and submit ${f(p.phases.record)}, wait for the result ${f(p.phases.wait)}, pack ${f(p.phases.pack)}`,
     `measured apart: matvec on the GPU ${f(p.matvecGpu)} (back-to-back runs), recording ${f(p.encode)}, a bare upload and readback ${f(p.roundTrip)}, one run alone from submit to readback ${f(p.single)}`,

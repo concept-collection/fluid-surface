@@ -89,10 +89,11 @@ export async function movingChecks(device: GPUDevice, check: Check, log: Log): P
 
   for (const [dir, label] of [['killing-cpu-L12', 'killing example'], ['rotating-perturbed-cpu-L12', 'rotating perturbed sphere']]) {
     await stepChecks(device, check, log, readDump(new URL(`./fixtures/${dir}/`, import.meta.url)), label);
+    await stepChecks(device, check, log, readDump(new URL(`./fixtures/${dir}/`, import.meta.url)), label, true);
   }
 }
 
-async function stepChecks(device: GPUDevice, check: Check, log: Log, dump: ReturnType<typeof readDump>, label: string): Promise<void> {
+async function stepChecks(device: GPUDevice, check: Check, log: Log, dump: ReturnType<typeof readDump>, label: string, onGpu = false): Promise<void> {
   const s = dump.scalars;
   const lmax = s.lmax;
   const cfg = productConfig(lmax);
@@ -103,9 +104,10 @@ async function stepChecks(device: GPUDevice, check: Check, log: Log, dump: Retur
     relayoutCoeffs(new Float32Array(a.subarray(2 * c * nlm, 2 * (c + 1) * nlm)), work, prod);
   const fields = (name: string, n: number) => Array.from({ length: n }, (_, c) => field(dump.arrays[name], c));
   const volume = s.volume === 1;
-  const ms = await MovingStokes.create(device, lmax, { re: s.re, be: s.bending ? s.be : Infinity, volume, dt: s.dt, gmres: GMRES });
+  const ms = await MovingStokes.create(device, lmax, { re: s.re, be: s.bending ? s.be : Infinity, volume, dt: s.dt, gmres: { ...GMRES, device: onGpu } });
+  if (onGpu) label += ', GMRES on the GPU';
   const ops = (n: keyof MovingStokes['fns']) => ms.fns[n].describe().length;
-  log(`  stokes.m compiles to: setup ${ops('setup')}, rhs ${ops('rhs')}, matvec ${ops('matvec')}, advance ${ops('advance')} GPU operations`);
+  if (!onGpu) log(`  stokes.m compiles to: setup ${ops('setup')}, rhs ${ops('rhs')}, matvec ${ops('matvec')}, advance ${ops('advance')} GPU operations`);
   // The C++'s packed vectors end with the multiplier when the volume is constrained.
   const nr = (lmax + 1) * (lmax + 1);
   const fromCpp = (packed: Float64Array) =>
@@ -117,11 +119,11 @@ async function stepChecks(device: GPUDevice, check: Check, log: Log, dump: Retur
   const az = await ms.apply(fromCpp(dump.arrays.z));
   const azCpp = fromCpp(dump.arrays.Az);
   const eA = relL2(az, azCpp);
-  const block = volume
+  const block = volume && !onGpu
     ? `; volume block ${fmt(relL2(ms.block, [s.M00, s.M01, s.M10, s.M11]))} (used: ${ms.useBlock}), ` +
       `multiplier row ${az[az.length - 1].toPrecision(6)} (C++ ${azCpp[azCpp.length - 1].toPrecision(6)})`
     : '';
-  check(
+  if (!onGpu) check(
     `moving: ${label}: Stokes-preconditioned operator and right-hand side match the C++ (fp32 vs f64), rel L2`,
     eA < 1e-5 && eB < 1e-5,
     `A z ${fmt(eA)}, b ${fmt(eB)}; area ${ms.area.toPrecision(8)} (C++ ${s.area.toPrecision(8)})${block}`,
@@ -204,4 +206,5 @@ export async function bendingChecks(device: GPUDevice, check: Check, log: Log): 
 export async function volumeChecks(device: GPUDevice, check: Check, log: Log): Promise<void> {
   const dump = readDump(new URL('./fixtures/perturbed-cpu-L12/', import.meta.url));
   await stepChecks(device, check, log, dump, `perturbed sphere, Be ${dump.scalars.be}, volume constrained`);
+  await stepChecks(device, check, log, dump, `perturbed sphere, Be ${dump.scalars.be}, volume constrained`, true);
 }

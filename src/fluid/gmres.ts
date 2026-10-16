@@ -21,6 +21,9 @@ export interface GmresOptions {
   /** Krylov dimension per cycle. */
   restart: number;
   maxCycles: number;
+  /** Keep the Krylov basis on the GPU (src/fluid/deviceGmres.ts), where the
+   *  solver supports it. */
+  device?: boolean;
 }
 
 export interface GmresResult {
