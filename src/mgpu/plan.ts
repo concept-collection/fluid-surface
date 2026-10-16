@@ -1454,12 +1454,36 @@ export class ModelPlan {
     for (let s = 0; s < steps; s++) this.#encodeOps(encoder, this.#ops);
   }
 
+  /**
+   * Record one run for profiling: each op in a compute pass of its own, with
+   * its start and end written to `querySet` at 2j and 2j + 1. Returns each
+   * op's kind and label, or null for a copy, which has no pass and is not
+   * timed. Separate passes cost more than the shared one, so the times are
+   * for comparing ops, not for adding up to a run.
+   */
+  encodeTimed(encoder: GPUCommandEncoder, querySet: GPUQuerySet): ({ kind: string; label: string } | null)[] {
+    this.#prepareExact(encoder);
+    return this.#ops.map((op, j) => {
+      if (op.kind === 'copy') {
+        this.#encodeOps(encoder, [op]);
+        return null;
+      }
+      this.#encodeOps(encoder, [op], { querySet, beginningOfPassWriteIndex: 2 * j, endOfPassWriteIndex: 2 * j + 1 });
+      return { kind: op.kind, label: 'label' in op ? op.label : op.labels.join(', ') };
+    });
+  }
+
+  /** Number of ops in one run, as `encodeTimed` lists them. */
+  get opsLength(): number {
+    return this.#ops.length;
+  }
+
   /** Record one pass over `ops` into `encoder`. */
-  #encodeOps(encoder: GPUCommandEncoder, ops: Op[]): void {
+  #encodeOps(encoder: GPUCommandEncoder, ops: Op[], timestampWrites?: GPUComputePassTimestampWrites): void {
     {
       let pass: GPUComputePassEncoder | null = null;
       const inPass = (): GPUComputePassEncoder => {
-        if (!pass) pass = encoder.beginComputePass({ label: 'mgpu-step' });
+        if (!pass) pass = encoder.beginComputePass({ label: 'mgpu-step', timestampWrites });
         return pass;
       };
       const endPass = (): void => {

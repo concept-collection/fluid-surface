@@ -59,6 +59,8 @@
       .stats { margin-top: 10px; font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
       .stats b { color: var(--ink); font-weight: 600; }
       .stats .warn { color: #b35900; }
+      #profile-out { white-space: pre-wrap; font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace; margin: 6px 0 0; }
+      #profile-out:empty { display: none; }
       #charts { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; }
       .chart { flex: 1 1 300px; max-width: 420px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px 4px; }
       .chart-head { display: flex; justify-content: space-between; font-size: 13px; }
@@ -106,6 +108,7 @@
         <label>dt <select id="dt"></select></label>
         <label>r0 <input id="r0" type="range" min="0.05" max="0.5" step="0.05" value="0.4" /> <span id="r0val" class="val"></span></label>
         <button id="view">Reset view</button>
+        <button id="profile" title="Time the next step's parts: setup, GMRES, the matvec on the GPU">Profile a step</button>
       </div>
       <div id="panels">
         <div class="panel">
@@ -114,6 +117,7 @@
         </div>
       </div>
       <div class="stats" id="stats"></div>
+      <pre class="stats" id="profile-out"></pre>
       <div id="charts"><div id="chart-eh"></div><div id="chart-ekin"></div></div>
       <div id="err"></div>
       <details class="src">

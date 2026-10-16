@@ -190,6 +190,25 @@ At band 32 (product band 64), the same problem from rest with dt 0.005 for 100 s
 
 GMRES took 34.6 iterations per step at tol 1e-6 (the C++ 46.1 at 1e-8); a step took 0.29 s here on Dawn with an integrated GPU, against 0.19 s for the C++ on four cores. The volume drifts by 1.8e-4 over the run in both, since the constraint is on the linearized flux.
 
+## Where the time goes
+
+A step is the operator's setup and right-hand side, then GMRES on the host, each iteration uploading one vector, running the compiled matvec and reading the result back. [`src/fluid/profile.ts`](src/fluid/profile.ts) times the parts of one step: the matvec's GPU time from back-to-back runs, the CPU time to record it, a bare upload and readback, and each GPU operation from timestamp queries (one pass per operation, so these are for comparing operations). [`scripts/profile.ts`](scripts/profile.ts) runs it on Krause & Voigt's perturbed sphere, and the page's "Profile a step" button runs it in the browser. On Dawn (Node, Intel Iris Xe), the fifth step from rest (the third at band 64), dt 0.005:
+
+| | band 16 | band 32 | band 64 |
+|---|---:|---:|---:|
+| step | 150 ms | 300 ms | 1.2 s |
+| matvec applications (GMRES iterations + 2) | 22 | 36 | 72 |
+| one application, as GMRES sees it | 5.8 ms | 6.9 ms | 11.9 ms |
+| the matvec on the GPU | 2.0 ms | 3.3 ms | 9.5 ms |
+| recording and submitting it (CPU) | 1.1 ms | 1.2 ms | 1.2 ms |
+| a bare upload and readback | 0.3 ms | 0.3 ms | 0.5 ms |
+| GMRES's own arithmetic, per step | 4 ms | 27 ms | 295 ms |
+| share of the matvec's GPU time in the 37 transforms | 79% | 68% | 64% |
+
+The 126 element-wise kernels take most of the rest of the GPU time, and the 43 coefficient shuffles little. The parts of an application do not add up at band 32: inside GMRES the wait for the result is 5 to 9 ms from run to run, where a lone run takes 3 to 4 ms from submit to readback. The cause is not established; presumably it is in how Dawn's Node binding resolves `mapAsync`, since at band 64, where the GPU time dominates, the two agree. In the app's built-in browser (Chromium, with the page hidden, which throttles it), a band 32 step took 410 to 430 ms: the matvec's GPU time was the same, recording was cheaper (0.2 to 0.4 ms), a bare readback took 1 to 3 ms, and GMRES's host time was 130 to 150 ms, of which its arithmetic is about 55 ms.
+
+Two things follow. First, the matvec keeps the GPU busy for only 30 to 40% of a step at bands 16 and 32 (120 of 300 ms at band 32); the rest is the per-iteration round trip and GMRES on the host, whose cost grows as the iteration count squared times the vector length and is a quarter of the step at band 64. Keeping the Krylov basis on the GPU, as the C++ solver's native GMRES does, would remove both, at the price of orthogonalizing in fp32. Second, of the GPU time, the transforms are the larger part; ten of the 37 are the grid round trip of the conversion to Q, S, T (step 4a), which coefficient recurrences would avoid.
+
 ## Where numbl needed help
 
 This list records each place the MATLAB could not say what was meant, or the compiler did less than it should, since that is what a numbl paper has to report.
@@ -227,7 +246,7 @@ python scripts/shtns_sphtor_fixture.py -lmax 16
 - `src/mgpu/`: the MATLAB-to-WebGPU pipeline from turing-surface (numbl lowering, planning, WGSL generation). `gpuFunction.ts` compiles one `.m` function into something the host can call.
 - `models/`: one solver mode per file (`static_stokes.m`, `stokes.m`). `src/fluid/`: the host side, GMRES and the steppers.
 - `src/geom/`: the geometry on the GPU and the example surfaces. `src/render/`, `src/main.ts`, `index.html`: the page.
-- `test/`, `scripts/`: the checks and their runner, and `scripts/kv.ts`, the Krause & Voigt run; `scripts/cpp/` holds the tool that writes the C++ reference.
+- `test/`, `scripts/`: the checks and their runner, `scripts/kv.ts`, the Krause & Voigt run, and `scripts/profile.ts`, the timing of one of its steps; `scripts/cpp/` holds the tool that writes the C++ reference.
 
 ## The numbl dependency
 

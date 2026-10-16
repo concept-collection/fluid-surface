@@ -97,6 +97,38 @@ export class GpuFunction {
     this.#device.queue.submit([enc.finish()]);
   }
 
+  /**
+   * GPU time of each operation of one call, in milliseconds, from timestamp
+   * queries (each op in its own pass; see Plan.encodeTimed). Needs the
+   * device's 'timestamp-query' feature; browsers may round the times
+   * (Chrome to 100 us unless its WebGPU developer features are on).
+   */
+  async timeOps(): Promise<{ kind: string; label: string; ms: number }[]> {
+    if (!this.#device.features.has('timestamp-query')) throw new Error('timeOps: no timestamp-query on this device');
+    const n = this.#plan.opsLength;
+    const querySet = this.#device.createQuerySet({ type: 'timestamp', count: 2 * n });
+    const resolve = this.#device.createBuffer({ size: 16 * n, usage: GPUBufferUsage.QUERY_RESOLVE | GPUBufferUsage.COPY_SRC });
+    const stage = this.#device.createBuffer({ size: 16 * n, usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST });
+    try {
+      const enc = this.#device.createCommandEncoder({ label: 'gpu-function-timed' });
+      const ops = this.#plan.encodeTimed(enc, querySet);
+      enc.resolveQuerySet(querySet, 0, 2 * n, resolve, 0);
+      enc.copyBufferToBuffer(resolve, 0, stage, 0, 16 * n);
+      this.#device.queue.submit([enc.finish()]);
+      await stage.mapAsync(GPUMapMode.READ);
+      const t = new BigInt64Array(stage.getMappedRange().slice(0));
+      const out: { kind: string; label: string; ms: number }[] = [];
+      ops.forEach((op, j) => {
+        if (op) out.push({ ...op, ms: Number(t[2 * j + 1] - t[2 * j]) / 1e6 });
+      });
+      return out;
+    } finally {
+      querySet.destroy();
+      resolve.destroy();
+      stage.destroy();
+    }
+  }
+
   /** The buffer holding a named argument or output. */
   buffer(name: string): GPUBuffer | undefined {
     return this.#plan.buffer(name) ?? this.#host.get(name)?.buffer;

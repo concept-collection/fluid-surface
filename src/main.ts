@@ -11,6 +11,7 @@ import { requestShtDevice } from './sht/sht.ts';
 import { gaussNodesWeights } from './sht/gauss.ts';
 import { perturbedSphere, productConfig } from './geom/geometry.ts';
 import { MovingStokes, type FluidState } from './fluid/movingStokes.ts';
+import { formatProfile, profileStep } from './fluid/profile.ts';
 import { SphereScene } from './render/SphereScene.ts';
 import { buildTopology, fillColors, fillFieldValues, fillPositions, type SphereMeshTopology } from './render/sphereMesh.ts';
 import { colormaps } from './render/colormaps.ts';
@@ -176,6 +177,21 @@ async function advance(): Promise<void> {
   draw();
 }
 
+/** Advances one step with its parts timed (src/fluid/profile.ts). */
+async function profile(): Promise<void> {
+  const r = run!;
+  const out = $<HTMLPreElement>('profile-out');
+  out.textContent = 'profiling a step...';
+  const t0 = performance.now();
+  const { profile: p, state } = await profileStep(device, r.ms, r.state);
+  r.state = state;
+  r.step++;
+  await observe(p.iterations, performance.now() - t0, p.converged);
+  draw();
+  const ts = device.features.has('timestamp-query') ? '' : ' (no timestamp queries on this device, so no per-op times)';
+  out.textContent = [`profile of step ${r.step}, band ${r.lmax}${ts}:`, ...formatProfile(p)].join('\n');
+}
+
 /** The run loop: one step per frame while playing. */
 let busy = false;
 async function loop(): Promise<void> {
@@ -238,6 +254,7 @@ async function start(): Promise<void> {
     if (playing) void loop();
   });
   $<HTMLButtonElement>('reset').addEventListener('click', () => void paused(reset));
+  $<HTMLButtonElement>('profile').addEventListener('click', () => void paused(profile));
   r0Input.addEventListener('input', showR0);
   r0Input.addEventListener('change', () => void paused(reset));
   dtSel.addEventListener('change', rebuild);
