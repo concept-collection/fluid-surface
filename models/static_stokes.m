@@ -25,8 +25,7 @@ function [v1, v2, v3, pscale, vdiv] = setup(U1, U2, U3, n1, n2, n3, H, sqrtg, wq
   num = dot(h2, wq);
   area = dot(sqrtg, wq);
   meanH2 = num / area;
-  % (the C++ takes max(lam (lam - 2), 0), which is lam (lam - 2) at every degree)
-  vdiv = mass + lam / re + (disp / be) * lam .* (lam - 2);
+  vdiv = mass + lam / re + (disp / be) * max(lam .* (lam - 2), 0);
   pscale = e0 + (1 - e0) .* (-vdiv ./ (lam + 4 * meanH2));
 end
 

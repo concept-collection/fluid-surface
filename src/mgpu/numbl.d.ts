@@ -366,6 +366,9 @@ declare module 'numbl-src/numbl-core/jit/builtins/index.ts' {
     name: string;
     /** Safe to evaluate one output element from one input element per slot. */
     elementwise?: boolean;
+    /** Elementwise for these argument types only (two-argument `max` is
+     *  pointwise, one-argument `max` a reduction). */
+    isElementwiseCall?(argTypes: import('numbl-src/numbl-core/jit/lowering/types.ts').Type[]): boolean;
   }
   export function getBuiltin(name: string): Builtin | undefined;
 }

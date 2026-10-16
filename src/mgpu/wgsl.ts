@@ -204,7 +204,8 @@ function emitExpr(e: IRExpr, ctx: Ctx): string {
 
       const fn = CALL_FNS[e.name];
       const b = getBuiltin(e.name);
-      if (!fn || !b?.elementwise) {
+      const pointwise = b?.elementwise === true || b?.isElementwiseCall?.(e.args.map((a) => a.ty)) === true;
+      if (!fn || !pointwise) {
         // A call numbl resolved to another function in the workspace gets a
         // mangled specialization name; a builtin keeps its source-level name.
         // User-function calls are expanded into the caller before planning
