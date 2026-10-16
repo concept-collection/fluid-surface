@@ -1,5 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
+import { LicPass } from './lic.ts';
 
 /**
  * Three.js scene wrapper: a single indexed triangle mesh with dynamic
@@ -59,6 +60,8 @@ export class SphereScene {
   #mesh: THREE.Mesh;
   /** Line segments drawn over the surface (a vector field's arrows), or null. */
   #lines: THREE.LineSegments | null = null;
+  /** Streamlines of the `velocity` attribute over the colours (src/render/lic.ts), or null. */
+  #lic: LicPass | null = null;
   #animationId: number | null = null;
   #defaultCameraState: {
     position: THREE.Vector3;
@@ -111,6 +114,10 @@ export class SphereScene {
     colorAttr.setUsage(THREE.DynamicDrawUsage);
     this.#geometry.setAttribute('position', positionAttr);
     this.#geometry.setAttribute('color', colorAttr);
+    // A tangent field for the streamlines, when shown.
+    const velocityAttr = new THREE.BufferAttribute(new Float32Array(numVertices * 3), 3);
+    velocityAttr.setUsage(THREE.DynamicDrawUsage);
+    this.#geometry.setAttribute('velocity', velocityAttr);
     this.#geometry.setIndex(new THREE.BufferAttribute(indices, 1));
     this.#geometry.computeVertexNormals();
     this.#geometry.computeBoundingSphere();
@@ -158,7 +165,8 @@ export class SphereScene {
     const r = sharedRenderer(w, h);
     r.setViewport(0, 0, w, h);
     r.setScissor(0, 0, w, h);
-    r.render(this.#scene, this.#camera);
+    if (this.#lic) this.#lic.render(r, this.#scene, this.#camera, w, h);
+    else r.render(this.#scene, this.#camera);
     this.#ctx.drawImage(r.domElement, 0, r.domElement.height - h, w, h, 0, 0, w, h);
   }
 
@@ -212,6 +220,26 @@ export class SphereScene {
     }
     g.computeBoundingSphere();
     (this.#lines.material as THREE.LineBasicMaterial).color.set(color);
+    this.#needsRender = true;
+  }
+
+  /**
+   * Streamlines of a tangent field (x, y, z per vertex, world frame) by line
+   * integral convolution over the colours; `vmax` is its largest speed, which
+   * the streaks fade out against. null removes them.
+   */
+  setStreamlines(velocity: Float32Array | null, vmax = 0): void {
+    if (!velocity) {
+      this.#lic?.dispose();
+      this.#lic = null;
+      this.#needsRender = true;
+      return;
+    }
+    const attr = this.#geometry.getAttribute('velocity') as THREE.BufferAttribute;
+    (attr.array as Float32Array).set(velocity);
+    attr.needsUpdate = true;
+    this.#lic ??= new LicPass(this.#geometry);
+    this.#lic.vmax = vmax;
     this.#needsRender = true;
   }
 
@@ -377,6 +405,7 @@ export class SphereScene {
     this.#geometry.dispose();
     (this.#mesh.material as THREE.Material).dispose();
     this.setLines(null);
+    this.setStreamlines(null);
     this.#canvas.remove();
   }
 }

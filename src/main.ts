@@ -45,6 +45,7 @@ const stats = $<HTMLDivElement>('stats');
 const err = $<HTMLDivElement>('err');
 const sphereBox = $<HTMLDivElement>('sphere');
 const arrowsBox = $<HTMLInputElement>('arrows');
+const licBox = $<HTMLInputElement>('lic');
 const refFile = $<HTMLInputElement>('ref-file');
 const refNote = $<HTMLSpanElement>('ref-note');
 const cmdLine = $<HTMLElement>('cmd');
@@ -229,6 +230,26 @@ function drawArrows(): string {
   return vmax > 0 ? ` &middot; arrows: tangential velocity, longest ${vmax.toPrecision(3)}` : '';
 }
 
+/** Streamlines of the tangential velocity over the colouring (src/render/lic.ts). */
+function drawStreamlines(): void {
+  const r = run!;
+  if (!licBox.checked || !r.vel) {
+    r.scene.setStreamlines(null);
+    return;
+  }
+  const nv = r.topo.numVertices;
+  const comp = new Float32Array(nv);
+  const out = new Float32Array(3 * nv);
+  for (let c = 0; c < 3; c++) {
+    fillFieldValues(comp, r.vel.t[c], r.topo);
+    for (let k = 0; k < nv; k++) out[3 * k + c] = comp[k];
+  }
+  let vmax = 0;
+  const [t1, t2, t3] = r.vel.t;
+  for (let k = 0; k < t1.length; k++) vmax = Math.max(vmax, Math.hypot(t1[k], t2[k], t3[k]));
+  r.scene.setStreamlines(out, vmax);
+}
+
 function draw(): void {
   const r = run;
   if (!r || !r.field) return;
@@ -245,6 +266,7 @@ function draw(): void {
   r.scene.updateColors(r.colors);
   colorbar.update(cmap, shown.lo, shown.hi);
   const arrows = drawArrows();
+  drawStreamlines();
   const L = r.last;
   const t = r.step * r.dt;
   const { nlat, nphi, lmax } = r.ms.cfg;
@@ -396,6 +418,7 @@ async function start(): Promise<void> {
   );
   $<HTMLButtonElement>('view').addEventListener('click', () => run?.scene.resetCamera());
   arrowsBox.addEventListener('change', draw);
+  licBox.addEventListener('change', draw);
   refFile.addEventListener('change', async () => {
     const file = refFile.files?.[0];
     if (!file) return;
