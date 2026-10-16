@@ -367,6 +367,12 @@ export function externalOpFiles(g: GridSizes): { name: string; source: string }[
       source: transformSource('dthetac', 2, g.nlm, 2, g.nlm),
     },
     {
+      // The transposed theta shift: with an analysis, the quadrature against
+      // sin(theta) dtheta Y_l^m that a vector analysis needs (lib/sphtor.m).
+      name: 'dthetat.mtoc2.js',
+      source: transformSource('dthetat', 2, g.nlm, 2, g.nlm),
+    },
+    {
       name: 'dphic.mtoc2.js',
       source: transformSource('dphic', 2, g.nlm, 2, g.nlm),
     },
@@ -459,6 +465,7 @@ export const EXTERNAL_OPS = new Map<string, { minArgs: number; maxArgs: number }
   ['dtheta', { minArgs: 1, maxArgs: 1 }],
   ['dphi', { minArgs: 1, maxArgs: 1 }],
   ['dthetac', { minArgs: 1, maxArgs: 1 }],
+  ['dthetat', { minArgs: 1, maxArgs: 1 }],
   ['dphic', { minArgs: 1, maxArgs: 1 }],
   ['dphig', { minArgs: 1, maxArgs: 1 }],
   ['randnfun3', { minArgs: 4, maxArgs: 4 }],

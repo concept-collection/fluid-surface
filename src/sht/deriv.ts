@@ -22,7 +22,7 @@
  *   dtheta(U) == synth(dthetac(U)) / sin(theta)
  */
 import type { ShtPlan, ShtBinding } from './sht.ts';
-import { derivCoeffs } from './derivCoeffs.ts';
+import { derivCoeffs, derivTransposeCoeffs } from './derivCoeffs.ts';
 import { dthetaShuffleWGSL, dphiShuffleWGSL, divideSinThetaWGSL } from './wgsl/deriv.ts';
 
 const WG = 64;
@@ -68,6 +68,9 @@ export class DerivPlan {
 
   private bufAPlus!: GPUBuffer;
   private bufAMinus!: GPUBuffer;
+  /** dthetat's tables: the dthetac kernel run with the transposed shift. */
+  private bufTPlus!: GPUBuffer;
+  private bufTMinus!: GPUBuffer;
   private bufMOf!: GPUBuffer;
   private bufSinTheta!: GPUBuffer;
   /** Scratch coefficient buffer for the shuffled input to synth -- shared
@@ -97,6 +100,7 @@ export class DerivPlan {
     const dev = this.device;
 
     const { aPlus, aMinus, mOf } = derivCoeffs(this.sht.cfg.lmax, this.sht.cfg.mmax);
+    const tr = derivTransposeCoeffs(this.sht.cfg.lmax, this.sht.cfg.mmax);
     const sinTheta = new Float32Array(nlat);
     for (let i = 0; i < nlat; i++) {
       const ct = this.sht.cosTheta[i];
@@ -107,6 +111,8 @@ export class DerivPlan {
       dev.createBuffer({ label, size, usage });
     this.bufAPlus = mk('deriv-aplus', 4 * this.nlm);
     this.bufAMinus = mk('deriv-aminus', 4 * this.nlm);
+    this.bufTPlus = mk('deriv-tplus', 4 * this.nlm);
+    this.bufTMinus = mk('deriv-tminus', 4 * this.nlm);
     this.bufMOf = mk('deriv-mof', 4 * this.nlm);
     this.bufSinTheta = mk('deriv-sintheta', 4 * nlat);
     this.scratch = mk(
@@ -117,6 +123,8 @@ export class DerivPlan {
 
     dev.queue.writeBuffer(this.bufAPlus, 0, new Float32Array(aPlus));
     dev.queue.writeBuffer(this.bufAMinus, 0, new Float32Array(aMinus));
+    dev.queue.writeBuffer(this.bufTPlus, 0, new Float32Array(tr.aPlus));
+    dev.queue.writeBuffer(this.bufTMinus, 0, new Float32Array(tr.aMinus));
     dev.queue.writeBuffer(this.bufMOf, 0, mOf as Uint32Array<ArrayBuffer>);
     dev.queue.writeBuffer(this.bufSinTheta, 0, sinTheta);
 
@@ -143,6 +151,25 @@ export class DerivPlan {
       entries: [
         { binding: 0, resource: { buffer: this.bufAPlus } },
         { binding: 1, resource: { buffer: this.bufAMinus } },
+        { binding: 2, resource: { buffer: qlmIn } },
+        { binding: 3, resource: { buffer: qlmOut } },
+      ],
+    });
+  }
+
+  /**
+   * Bind group for the transposed theta shift, `dthetat`:
+   * w_l^m = alpha^+(l,m) a_{l+1}^m + alpha^-(l,m) a_{l-1}^m. Applied to an
+   * analysis, it gives the quadrature against sin(theta) dtheta Y_l^m, which
+   * is what a vector analysis needs (lib/sphtor.m). Same kernel and the same
+   * buffer restriction as dthetac; only the tables differ.
+   */
+  createDthetatBinding(qlmIn: GPUBuffer, qlmOut: GPUBuffer): GPUBindGroup {
+    return this.device.createBindGroup({
+      layout: this.pipeDtheta.getBindGroupLayout(0),
+      entries: [
+        { binding: 0, resource: { buffer: this.bufTPlus } },
+        { binding: 1, resource: { buffer: this.bufTMinus } },
         { binding: 2, resource: { buffer: qlmIn } },
         { binding: 3, resource: { buffer: qlmOut } },
       ],
@@ -284,7 +311,7 @@ export class DerivPlan {
 
   destroy(): void {
     for (const b of [
-      this.bufAPlus, this.bufAMinus, this.bufMOf, this.bufSinTheta, this.scratch,
+      this.bufAPlus, this.bufAMinus, this.bufTPlus, this.bufTMinus, this.bufMOf, this.bufSinTheta, this.scratch,
     ]) b?.destroy();
   }
 }

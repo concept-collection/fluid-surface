@@ -195,7 +195,7 @@ type Op =
   | { kind: 'synth' | 'analys'; binding: ShtBinding; label: string }
   | { kind: 'synth-batch' | 'analys-batch'; binding: ShtBatchBinding; labels: string[] }
   | { kind: 'dtheta' | 'dphi'; binding: DerivBinding; label: string }
-  | { kind: 'dthetac' | 'dphic'; bindGroup: GPUBindGroup; label: string }
+  | { kind: 'dthetac' | 'dthetat' | 'dphic'; bindGroup: GPUBindGroup; label: string }
   | { kind: 'dphig'; binding: ShtDphigBinding; label: string }
   | { kind: 'dot'; binding: DotBinding; label: string }
   | { kind: 'lusolve'; call: ExactCall; label: string }
@@ -923,7 +923,7 @@ export class ModelPlan {
           });
         } else if (
           ext.name === 'dtheta' || ext.name === 'dphi' ||
-          ext.name === 'dthetac' || ext.name === 'dphic'
+          ext.name === 'dthetac' || ext.name === 'dthetat' || ext.name === 'dphic'
         ) {
           if (!deriv) {
             throw new UnsupportedOnGpu(
@@ -932,7 +932,7 @@ export class ModelPlan {
               stmt.span,
             );
           }
-          if (ext.name === 'dthetac' || ext.name === 'dphic') {
+          if (ext.name === 'dthetac' || ext.name === 'dthetat' || ext.name === 'dphic') {
             // Coefficient-space shuffles read at l+-1 (dthetac) or in place
             // (dphic) and cannot alias their output: WebGPU forbids one buffer
             // being readable and writable storage in the same dispatch, and
@@ -950,7 +950,9 @@ export class ModelPlan {
               bindGroup:
                 ext.name === 'dthetac'
                   ? deriv.createDthetacBinding(src.buffer, dest.buffer)
-                  : deriv.createDphicBinding(src.buffer, dest.buffer),
+                  : ext.name === 'dthetat'
+                    ? deriv.createDthetatBinding(src.buffer, dest.buffer)
+                    : deriv.createDphicBinding(src.buffer, dest.buffer),
               label,
             });
             return;
@@ -1459,6 +1461,8 @@ export class ModelPlan {
             this.#derivInto(inPass(), op);
             break;
           case 'dthetac':
+          case 'dthetat':
+            // The same kernel; the bind group carries the shift's tables.
             this.#deriv!.encodeDthetacInto(inPass(), op.bindGroup);
             break;
           case 'dphic':

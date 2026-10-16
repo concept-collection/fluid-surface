@@ -32,6 +32,33 @@ export function alphaMinus(l: number, m: number): number {
   return -(l + 1) * Math.sqrt(((l - m) * (l + m)) / ((2 * l - 1) * (2 * l + 1)));
 }
 
+/**
+ * The transpose of the same shift, `dthetat`:
+ *
+ *   w_l^m = alpha^+(l,m) a_{l+1}^m + alpha^-(l,m) a_{l-1}^m
+ *
+ * If a holds the analysis of f, w holds the quadrature of f against
+ * sin(theta) dtheta Y_l^m, since that is alpha^+ Y_{l+1} + alpha^- Y_{l-1}
+ * pointwise. It has the dthetac shape (one coefficient on each neighbour), so
+ * it reuses the dthetac kernel with these tables in place of aPlus/aMinus.
+ */
+export function derivTransposeCoeffs(lmax: number, mmax: number): DerivCoeffs {
+  const nlm = nlmCalc(lmax, mmax);
+  const aPlus = new Float64Array(nlm);
+  const aMinus = new Float64Array(nlm);
+  const mOf = new Uint32Array(nlm);
+  for (let m = 0; m <= mmax; m++) {
+    for (let l = m; l <= lmax; l++) {
+      const lm = lmIndex(lmax, l, m);
+      mOf[lm] = m;
+      // aPlus multiplies the l-1 neighbour, aMinus the l+1 one, as in the kernel.
+      if (l - 1 >= m) aPlus[lm] = alphaMinus(l, m);
+      if (l + 1 <= lmax) aMinus[lm] = alphaPlus(l, m);
+    }
+  }
+  return { aPlus, aMinus, mOf };
+}
+
 export function derivCoeffs(lmax: number, mmax: number): DerivCoeffs {
   const nlm = nlmCalc(lmax, mmax);
   const aPlus = new Float64Array(nlm);

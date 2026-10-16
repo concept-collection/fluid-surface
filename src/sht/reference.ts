@@ -188,6 +188,90 @@ export class ShtReference {
   dphi(qlm: ArrayLike<number>): Float64Array {
     return this.synth(this.dphic(qlm));
   }
+
+  /** Transposed theta shift, f64: w_l^m = alpha^+(l,m) a_{l+1}^m +
+   *  alpha^-(l,m) a_{l-1}^m (derivCoeffs.ts derivTransposeCoeffs). */
+  dthetat(qlm: ArrayLike<number>): Float64Array {
+    const { lmax, mmax } = this.cfg;
+    const v = new Float64Array(2 * this.nlm);
+    for (let m = 0; m <= mmax; m++) {
+      for (let l = m; l <= lmax; l++) {
+        const lm = lmIndex(lmax, l, m);
+        let re = 0;
+        let im = 0;
+        if (l - 1 >= m) {
+          const a = alphaMinus(l, m);
+          re += a * qlm[2 * (lm - 1)];
+          im += a * qlm[2 * (lm - 1) + 1];
+        }
+        if (l + 1 <= lmax) {
+          const a = alphaPlus(l, m);
+          re += a * qlm[2 * (lm + 1)];
+          im += a * qlm[2 * (lm + 1) + 1];
+        }
+        v[2 * lm] = re;
+        v[2 * lm + 1] = im;
+      }
+    }
+    return v;
+  }
+
+  /**
+   * Vector synthesis, f64, in SHTns' convention:
+   *   v_theta = dtheta S + dphi T / sin(theta),
+   *   v_phi   = dphi S / sin(theta) - dtheta T.
+   * Exact when S and T stop below lmax, so that the theta shift stays in band.
+   */
+  sphtorSynth(S: ArrayLike<number>, T: ArrayLike<number>): { vt: Float64Array; vp: Float64Array } {
+    const { nlat, nphi } = this.cfg;
+    const a = this.synth(this.dthetac(S));
+    const b = this.synth(this.dphic(T));
+    const c = this.synth(this.dphic(S));
+    const d = this.synth(this.dthetac(T));
+    const vt = new Float64Array(nlat * nphi);
+    const vp = new Float64Array(nlat * nphi);
+    for (let i = 0; i < nlat; i++) {
+      for (let j = 0; j < nphi; j++) {
+        const k = i * nphi + j;
+        vt[k] = (a[k] + b[k]) / this.st[i];
+        vp[k] = (c[k] - d[k]) / this.st[i];
+      }
+    }
+    return { vt, vp };
+  }
+
+  /** The f64 twin of lib/sphtor.m: spheroidal and toroidal coefficients of a
+   *  tangent field from two scalar analyses and the theta and phi shifts. */
+  sphtor(vt: ArrayLike<number>, vp: ArrayLike<number>): { S: Float64Array; T: Float64Array } {
+    const { lmax, mmax, nlat, nphi } = this.cfg;
+    const ut = new Float64Array(nlat * nphi);
+    const up = new Float64Array(nlat * nphi);
+    for (let i = 0; i < nlat; i++) {
+      for (let j = 0; j < nphi; j++) {
+        ut[i * nphi + j] = vt[i * nphi + j] / this.st[i];
+        up[i * nphi + j] = vp[i * nphi + j] / this.st[i];
+      }
+    }
+    const A = this.analys(ut);
+    const B = this.analys(up);
+    const tA = this.dthetat(A);
+    const tB = this.dthetat(B);
+    const pA = this.dphic(A);
+    const pB = this.dphic(B);
+    const S = new Float64Array(2 * this.nlm);
+    const T = new Float64Array(2 * this.nlm);
+    for (let m = 0; m <= mmax; m++) {
+      for (let l = Math.max(m, 1); l <= lmax; l++) {
+        const lm = lmIndex(lmax, l, m);
+        const il = 1 / (l * (l + 1));
+        for (const k of [2 * lm, 2 * lm + 1]) {
+          S[k] = (tA[k] - pB[k]) * il;
+          T[k] = -(pA[k] + tB[k]) * il;
+        }
+      }
+    }
+    return { S, T };
+  }
 }
 
 /** Random band-limited spectrum for testing (m=0 imaginary parts zeroed). */
