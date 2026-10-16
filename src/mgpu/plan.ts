@@ -24,6 +24,7 @@ import { exactMatrixBytes, type ExactOperator, type ExactSite } from './exact.ts
 import type { CompiledFunction } from './compile.ts';
 import { EXTERNAL_OPS } from './externals.ts';
 import { splitWideKernels } from './split.ts';
+import { forEachVar } from './irwalk.ts';
 import {
   MODE_BUFFER,
   INITIAL_MODES,
@@ -1639,24 +1640,5 @@ function collectVars(
   e: IRExpr,
   visit: (v: Extract<IRExpr, { kind: 'Var' }>) => void,
 ): void {
-  const walk = (x: IRExpr): void => {
-    switch (x.kind) {
-      case 'Var':
-        visit(x);
-        return;
-      case 'Binary':
-        walk(x.left);
-        walk(x.right);
-        return;
-      case 'Unary':
-        walk(x.operand);
-        return;
-      case 'Call':
-        x.args.forEach(walk);
-        return;
-      default:
-        return;
-    }
-  };
-  walk(e);
+  forEachVar(e, visit);
 }

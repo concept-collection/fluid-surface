@@ -300,6 +300,10 @@ function cloneExpr(e: IRExpr, c: CloneCtx): IRExpr {
     case 'MemberLoad':
       // A field read of a struct parameter reads the caller's struct.
       return { ...e, base: cloneExpr(e.base, c) };
+    case 'IndexSlice':
+      return { ...e, base: cloneExpr(e.base, c) };
+    case 'TensorConcat':
+      return { ...e, cells: e.cells.map((row) => row.map((x) => cloneExpr(x, c))) };
     default:
       // Literals and anything else without variable reads: share as-is (the
       // planner treats expressions as read-only).

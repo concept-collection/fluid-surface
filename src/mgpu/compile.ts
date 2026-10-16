@@ -27,6 +27,7 @@ import type { For, IRExpr, IRFunc, IRStmt } from 'numbl-src/numbl-core/jit/lower
 import type { Type } from 'numbl-src/numbl-core/jit/lowering/types.ts';
 import { externalOpFiles, type GridSizes } from './externals.ts';
 import { expandUserCalls } from './inlineCalls.ts';
+import { fuseKernels } from './fuse.ts';
 import { inFunction, ModelCompileError } from './errors.ts';
 
 /** What the host can supply for an argument the .m declares. */
@@ -227,6 +228,9 @@ export class CompiledModel {
     );
 
     inlinePass({ topLevelStmts: [], functions: entries });
+    // numbl's pass folds only same-shape element-wise code; ours also folds
+    // what one WGSL kernel computes (broadcasting, row sums, columns).
+    for (const fn of entries.values()) fuseKernels(fn);
 
     for (const { fn, loop, assignedBefore } of loops) checkLoopEscapes(fn, loop, assignedBefore);
   }

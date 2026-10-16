@@ -17,45 +17,19 @@
 import { isMultiElement } from 'numbl-src/numbl-core/jit/lowering/types.ts';
 import type { Assign, IRExpr, IRStmt } from 'numbl-src/numbl-core/jit/lowering/ir.ts';
 import type { Type } from 'numbl-src/numbl-core/jit/lowering/types.ts';
+import { childSlots, forEachVar } from './irwalk.ts';
 
 const isTensor = (t: Type): boolean => t.kind === 'Numeric' && isMultiElement(t);
 
 /** Distinct array variables an expression reads. */
 function reads(e: IRExpr, out: Set<string>, isArray: (v: IRExpr & { kind: 'Var' }) => boolean): Set<string> {
-  switch (e.kind) {
-    case 'Var':
-      if (isArray(e)) out.add(e.cName);
-      break;
-    case 'Binary':
-      reads(e.left, out, isArray);
-      reads(e.right, out, isArray);
-      break;
-    case 'Unary':
-      reads(e.operand, out, isArray);
-      break;
-    case 'Call':
-      for (const a of e.args) reads(a, out, isArray);
-      break;
-  }
+  forEachVar(e, (v) => {
+    if (isArray(v)) out.add(v.cName);
+  });
   return out;
 }
 
-/** The children of an expression, with a setter for each. */
-function children(e: IRExpr): { get: () => IRExpr; set: (x: IRExpr) => void }[] {
-  switch (e.kind) {
-    case 'Binary':
-      return [
-        { get: () => e.left, set: (x) => (e.left = x) },
-        { get: () => e.right, set: (x) => (e.right = x) },
-      ];
-    case 'Unary':
-      return [{ get: () => e.operand, set: (x) => (e.operand = x) }];
-    case 'Call':
-      return e.args.map((_, i) => ({ get: () => e.args[i], set: (x: IRExpr) => (e.args[i] = x) }));
-    default:
-      return [];
-  }
-}
+const children = childSlots;
 
 /**
  * Returns `body` with over-wide element-wise statements split, recursing into

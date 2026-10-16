@@ -97,54 +97,33 @@ end
 % The constant mode of a velocity's surface divergence, and its flux.
 function [d00, flux] = response(V1, V2, V3, geo, grid, msk)
   [u1, u2, u3] = synth(V1, V2, V3);
-  D = analys(tandiv(u1, u2, u3, geo, grid, msk));
+  D = analys(tandiv([u1, u2, u3], geo, grid, msk));
   d00 = dot(D, msk.e0);
   un = (u1 .* geo.n1 + u2 .* geo.n2 + u3 .* geo.n3) .* geo.sqrtg;
   flux = dot(un, grid.wq);
 end
 
 function [R1, R2, R3, RP, RL] = matvec(Z1, Z2, Z3, Z4, Z5, v1, v2, v3, NC1, NC2, NC3, geo, der, bl, grid, msk, tab, mass, visc, disp, bscale, vol, cr00, crlam, ar00, arlam, ub, R, qdiv)
-  n1 = geo.n1;
-  n2 = geo.n2;
-  n3 = geo.n3;
-  H = geo.H;
+  n = [geo.n1, geo.n2, geo.n3];
+  v = [v1, v2, v3];
   [u1, u2, u3, p] = synth(Z1, Z2, Z3, Z4);
-  % velocity gradient G(r, c) = d u_r / d x_c, and the pressure gradient
-  [G11, G12, G13] = surfgrad(Z1, geo, grid);
-  [G21, G22, G23] = surfgrad(Z2, geo, grid);
-  [G31, G32, G33] = surfgrad(Z3, geo, grid);
-  [q1, q2, q3] = surfgrad(Z4, geo, grid);
-
-  % rate of deformation: the symmetric part of P G P, P = I - n n'
-  Gn1 = G11 .* n1 + G12 .* n2 + G13 .* n3;
-  Gn2 = G21 .* n1 + G22 .* n2 + G23 .* n3;
-  Gn3 = G31 .* n1 + G32 .* n2 + G33 .* n3;
-  nG1 = n1 .* G11 + n2 .* G21 + n3 .* G31;
-  nG2 = n1 .* G12 + n2 .* G22 + n3 .* G32;
-  nG3 = n1 .* G13 + n2 .* G23 + n3 .* G33;
-  nGn = n1 .* Gn1 + n2 .* Gn2 + n3 .* Gn3;
-  s11 = G11 - n1 .* nG1 - Gn1 .* n1 + n1 .* nGn .* n1;
-  s22 = G22 - n2 .* nG2 - Gn2 .* n2 + n2 .* nGn .* n2;
-  s33 = G33 - n3 .* nG3 - Gn3 .* n3 + n3 .* nGn .* n3;
-  s12 = 0.5 * (G12 - n1 .* nG2 - Gn1 .* n2 + G21 - n2 .* nG1 - Gn2 .* n1) + n1 .* nGn .* n2;
-  s13 = 0.5 * (G13 - n1 .* nG3 - Gn1 .* n3 + G31 - n3 .* nG1 - Gn3 .* n1) + n1 .* nGn .* n3;
-  s23 = 0.5 * (G23 - n2 .* nG3 - Gn2 .* n3 + G32 - n3 .* nG2 - Gn3 .* n2) + n2 .* nGn .* n3;
-
-  % divergence of the stress, row by row, and of the velocity
-  d1 = tandiv(s11, s12, s13, geo, grid, msk);
-  d2 = tandiv(s12, s22, s23, geo, grid, msk);
-  d3 = tandiv(s13, s23, s33, geo, grid, msk);
-  du = tandiv(u1, u2, u3, geo, grid, msk);
+  u = [u1, u2, u3];
+  % rows of the velocity gradient G(r, c) = d u_r / d x_c, and the pressure gradient
+  g1 = surfgrad(Z1, geo, grid);
+  g2 = surfgrad(Z2, geo, grid);
+  g3 = surfgrad(Z3, geo, grid);
+  q = surfgrad(Z4, geo, grid);
+  % divergence of the rate of deformation, row by row, and of the velocity
+  [d1, d2, d3] = deformdiv(g1, g2, g3, geo, grid, msk);
+  du = tandiv(u, geo, grid, msk);
 
   % momentum: inertia, convection by the transport velocity, pressure,
   % viscosity, and the multiplier's normal force
   lamv = vol * Z5;
-  m1 = mass * u1 + G11 .* v1 + G12 .* v2 + G13 .* v3 + q1 + 2 * H .* p .* n1 - visc * d1 - lamv .* n1;
-  m2 = mass * u2 + G21 .* v1 + G22 .* v2 + G23 .* v3 + q2 + 2 * H .* p .* n2 - visc * d2 - lamv .* n2;
-  m3 = mass * u3 + G31 .* v1 + G32 .* v2 + G33 .* v3 + q3 + 2 * H .* p .* n3 - visc * d3 - lamv .* n3;
+  m = mass * u + [sum(g1 .* v, 2), sum(g2 .* v, 2), sum(g3 .* v, 2)] + q + (2 * geo.H .* p - lamv) .* n - visc * [d1, d2, d3];
   % the normal velocity, whose displacement over the step bends the surface
-  un = u1 .* n1 + u2 .* n2 + u3 .* n3;
-  [M1, M2, M3, MD, N1, N2, N3] = analys(m1, m2, m3, du, un .* n1, un .* n2, un .* n3);
+  un = sum(u .* n, 2);
+  [M1, M2, M3, MD, N1, N2, N3] = analys(m(:, 1), m(:, 2), m(:, 3), du, un .* geo.n1, un .* geo.n2, un .* geo.n3);
   % the volume row: the flux of the normal velocity (the identity without the constraint)
   unw = un .* geo.sqrtg;
   flux = dot(unw, grid.wq);

@@ -115,18 +115,42 @@ declare module 'numbl-src/numbl-core/jit/lowering/ir.ts' {
     ty: Type;
     span: Span;
   }
+  /** `x(:, k)` and other slices. The WGSL backend takes a whole column of a
+   *  matrix at a literal index. */
+  export interface IndexSlice {
+    kind: 'IndexSlice';
+    base: IRExpr;
+    index: (
+      | { kind: 'Colon' }
+      | { kind: 'Scalar'; expr: IRExpr }
+      | { kind: 'Range'; start: IRExpr; step: IRExpr; end: IRExpr }
+    )[];
+    ty: Type;
+    span: Span;
+  }
+  /** `[a, b; c, d]`: rows of cells. The WGSL backend takes one row of
+   *  column blocks of the result's height. */
+  export interface TensorConcat {
+    kind: 'TensorConcat';
+    cells: IRExpr[][];
+    rowHeights: number[];
+    cellCols: number[][];
+    shape?: number[];
+    ty: Type;
+    span: Span;
+  }
   /** Any other IR expression kind — rejected by the WGSL emitter. */
   export interface OtherExpr {
     kind:
-      | 'ImagLit' | 'StringLit' | 'TensorBuild' | 'TensorConcat' | 'CellLit'
+      | 'ImagLit' | 'StringLit' | 'TensorBuild' | 'CellLit'
       | 'CellEmpty' | 'CellIndexLoad' | 'HandleLit' | 'HandleCaptureLoad'
-      | 'StructLit' | 'IndexLoad' | 'IndexSlice' | 'EndRef'
+      | 'StructLit' | 'IndexLoad' | 'EndRef'
       | 'MakeRange';
     ty: Type;
     span: Span;
   }
 
-  export type IRExpr = NumLit | Var | Binary | Unary | Call | MemberLoad | OtherExpr;
+  export type IRExpr = NumLit | Var | Binary | Unary | Call | MemberLoad | IndexSlice | TensorConcat | OtherExpr;
 
   export interface Assign {
     kind: 'Assign';
@@ -375,6 +399,14 @@ declare module 'numbl-src/numbl-core/jit/codegen/inlinePass.ts' {
   import type { IRProgram } from 'numbl-src/numbl-core/jit/lowering/ir.ts';
   /** Folds single-use ANF temps into their consumer, in place. */
   export function inlinePass(prog: IRProgram): void;
+}
+
+declare module 'numbl-src/numbl-core/jit/lowering/walk.ts' {
+  import type { IRExpr, IRStmt } from 'numbl-src/numbl-core/jit/lowering/ir.ts';
+  /** Visits `e` and every expression under it. */
+  export function forEachSubExpr(e: IRExpr, visit: (sub: IRExpr) => void): void;
+  /** Visits the expressions directly under a statement (not loop bodies). */
+  export function forEachTopLevelExpr(s: IRStmt, visit: (e: IRExpr) => void): void;
 }
 
 declare module 'numbl-src/numbl-core/jit/builtins/index.ts' {
