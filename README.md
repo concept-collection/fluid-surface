@@ -4,14 +4,14 @@ Fluid deformable surfaces in the browser: incompressible surface Navier-Stokes w
 
 The solver being ported is Dan Fortunato's C++ implementation in meliao/evolving_surface (cpu, CUDA and Metal backends). This is the sibling of [turing-surface](https://github.com/concept-collection/turing-surface), which solves reaction-diffusion on a fixed surface, and it starts from that project's transforms and compiler pipeline. The difference that keeps them apart is that here the geometry changes every step and each step is a saddle-point solve run to a tolerance, where turing-surface's design assumes a fixed surface and a fixed sequence of GPU operations.
 
-**Status:** steps 1 to 4a of 6: the vector analysis, the surface geometry (with a page that shows it), the fluid solver's static mode on a fixed surface, and a moving surface without bending, each checked against the C++. Bending, the volume constraint, relabeling and two phases are still to come.
+**Status:** steps 1 to 4b of 6: the vector analysis, the surface geometry (with a page that shows it), the fluid solver's static mode on a fixed surface, and a moving surface with the bending force, each checked against the C++. The volume constraint, relabeling and two phases are still to come.
 
 ## Plan
 
 1. The vector (spheroidal/toroidal) analysis from scalar transforms, against SHTns. Done; see below.
 2. The surface geometry (normal, curvatures, area element) on the GPU from the position's coefficients, against the C++ cpu backend. Done; see below.
 3. A Killing field on a fixed surface: the matvec, the static preconditioner and GMRES, against the exact BDF-1 decay rate. Done; see below.
-4. The moving surface, in three parts: (a) the operator without bending, the Stokes preconditioner and the normal-velocity update, done, see below; (b) bending; (c) the volume constraint, then Krause & Voigt's perturbed sphere at lmax 32 against the C++.
+4. The moving surface, in three parts: (a) the operator without bending, the Stokes preconditioner and the normal-velocity update, and (b) bending, both done, see below; (c) the volume constraint, then Krause & Voigt's perturbed sphere at lmax 32 against the C++.
 5. Relabeling, then an adaptive time step.
 6. Two phases.
 
@@ -91,6 +91,10 @@ scripts/cpp/build.sh <evolving_surface>/cpp <evolving_surface>/cpp/build-cpu
 <evolving_surface>/cpp/build-cpu/step_dump test/fixtures/rotating-perturbed-cpu-L12 killing 12 2 26 64 0.01 1 2 0 20 0.2
 ```
 
+```bash
+<evolving_surface>/cpp/build-cpu/step_dump test/fixtures/bending-perturbed-cpu-L12 killing 12 2 26 64 0.01 1 2 1 20 0.2
+```
+
 ### The page
 
 ```bash
@@ -139,6 +143,21 @@ Over the 20 steps the rotating perturbed sphere's position changes by 1.8% and t
 
 GMRES stops, as the C++'s does, when its own residual estimate reaches the tolerance; the explicit residual is computed once at the end and reported.
 
+## Bending
+
+The Helfrich force is -(2/Be) (Laplacian of H + 2 H (H^2 - K)) n, with the Laplacian in the C++'s flux form ([`lib/fluxlap.m`](lib/fluxlap.m)). The step treats it implicitly, as the C++ does: the surface's displacement over the step is dt times the normal velocity being solved for, so the matvec subtracts the force's derivative along that displacement. [`lib/bendjvp.m`](lib/bendjvp.m) is that derivative (`FluidBendingJvp`): the derivative of the position's derivative fields ([`lib/posderivs.m`](lib/posderivs.m), now shared with `lib/geometry.m`), of the curvatures, normal and Laplacian weights ([`lib/geomtangent.m`](lib/geomtangent.m), `KFGeometryTangent`), of the Laplacian of H, whose weights and metric factor move with the surface, and of the force itself. `bendlin` in `models/stokes.m` computes the force once per step and stores what the derivative reuses. A parameter `bscale = -2/Be` scales both, and 0 turns bending off, as Be = infinity does in the C++.
+
+With bending, the matvec compiles to 255 GPU operations, 99 of them the derivative. Checks against the C++ cpu backend in f64, the rotation of step 4a on the perturbed sphere (r0 0.2) with Be 2, band 12, dt 0.01, GMRES at tol 1e-6, relative L2:
+
+| check | result |
+|---|---|
+| bending force at the initial surface | 1.5e-6 |
+| its derivative along a random displacement | 1.1e-6 |
+| operator on a random vector, right-hand side | 2.0e-6, 8.3e-7 |
+| after 1 and after 20 steps | X 5.8e-8 and 2.5e-7, u 3.1e-7 and 3.3e-6, p 1.5e-6 and 1.5e-5 (8.5 GMRES iterations per step) |
+
+Over the 20 steps the surface moves by 6.5%. A step takes about 60 ms at band 12 in node.
+
 ## Where numbl needed help
 
 This list records each place the MATLAB could not say what was meant, or the compiler did less than it should, since that is what a numbl paper has to report.
@@ -149,7 +168,8 @@ This list records each place the MATLAB could not say what was meant, or the com
 - **A call on an expression does not fuse** (step 2). `1 ./ realsqrt(ptt .* gpp - ptp.^2)` compiles to three kernels where `realsqrt(detg)` compiles to one: the expression inside the call is not folded into the kernel. Not yet looked into.
 - **Bindings per kernel** (steps 2 and 3). A fused kernel binds every array its expression reads, plus the output and the parameters, against WebGPU's default limit of 8 storage buffers. The device asks for the adapter's limit (16 on this machine), and [`src/mgpu/split.ts`](src/mgpu/split.ts) splits a statement that still reads too many arrays, hoisting its widest subexpression that fits until the rest does. Each momentum line of the matvec, with the pressure gradient and the viscous divergence folded in, needs one such split.
 - **Vectors are three arrays.** A vector field is written as three scalar fields (`xt1`, `xt2`, `xt3`), and dot and cross products by hand; the rate-of-deformation tensor is nine (six distinct) scalar lines. Element-wise operations do not broadcast an `npts x 1` array against an `npts x 3` one.
-- **No structures.** The geometry is thirteen arrays, so the matvec takes 27 arguments.
+- **No structures.** Every field is its own argument: the static matvec takes 27, the moving one with bending 65, and `lib/geomtangent.m` 31 (the derivative fields of a position and of a displacement, five vectors each).
+- **No branches in a plan.** Bending is turned off by a zero scale (`bscale`), so a run without bending still pays for the force's derivative in every matvec, about 40% of it.
 - **`max(tensor, scalar)`** (step 3) is not supported by numbl's lowering yet. The one use was a no-op and was dropped.
 - **Reductions are statements.** `dot` must be its own statement on named arrays; `dot(a, w) / dot(b, w)` in one line does not compile, since the planner sees the grid-sized arguments inside a scalar kernel.
 - **One band per function.** A function runs on one grid and one band. Keeping every spectral field on the product band, with masks for truncation and filters (see the static mode above), works around it at some cost.
@@ -162,7 +182,7 @@ This list records each place the MATLAB could not say what was meant, or the com
 npm run test:node
 ```
 
-Runs [`test/sphtorChecks.ts`](test/sphtorChecks.ts), [`test/geometryChecks.ts`](test/geometryChecks.ts), [`test/stokesChecks.ts`](test/stokesChecks.ts) and [`test/movingChecks.ts`](test/movingChecks.ts) (`-- --only=moving` for one) on desktop WebGPU (Google Dawn, the optional `webgpu` package). The SHTns results it compares against are in [`test/fixtures/`](test/fixtures/), written by [`scripts/shtns_sphtor_fixture.py`](scripts/shtns_sphtor_fixture.py), which needs the `shtns` Python package:
+Runs [`test/sphtorChecks.ts`](test/sphtorChecks.ts), [`test/geometryChecks.ts`](test/geometryChecks.ts), [`test/stokesChecks.ts`](test/stokesChecks.ts) and [`test/movingChecks.ts`](test/movingChecks.ts) (`-- --only=bending` for one suite) on desktop WebGPU (Google Dawn, the optional `webgpu` package). The SHTns results it compares against are in [`test/fixtures/`](test/fixtures/), written by [`scripts/shtns_sphtor_fixture.py`](scripts/shtns_sphtor_fixture.py), which needs the `shtns` Python package:
 
 ```bash
 python scripts/shtns_sphtor_fixture.py -lmax 16

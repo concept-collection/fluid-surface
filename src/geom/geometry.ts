@@ -13,6 +13,7 @@ import { gaussNodesWeights } from '../sht/gauss.ts';
 import { gridForLmax, relayoutCoeffs, type ShtConfig } from '../sht/layout.ts';
 import { GpuFunction } from '../mgpu/gpuFunction.ts';
 import type { Binding } from '../mgpu/compile.ts';
+import { operatorLibs } from '../mgpu/libs.ts';
 import geometrySource from '../../lib/geometry.m?raw';
 
 /** lib/geometry.m's outputs, in order. */
@@ -118,6 +119,7 @@ export class SurfaceGeometry {
       source: geometrySource,
       name: 'geometry',
       bindings: { X1: spectral, X2: spectral, X3: spectral, ct: grid, st: grid },
+      libs: operatorLibs,
       nargout: GEOMETRY_OUTPUTS.length,
     });
     const { ct, st } = gridTrig(cfg);

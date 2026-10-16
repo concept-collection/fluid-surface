@@ -97,7 +97,7 @@ async function stepChecks(device: GPUDevice, check: Check, log: Log, dump: Retur
   const field = (a: Float64Array, c: number) =>
     relayoutCoeffs(new Float32Array(a.subarray(2 * c * nlm, 2 * (c + 1) * nlm)), work, prod);
   const fields = (name: string, n: number) => Array.from({ length: n }, (_, c) => field(dump.arrays[name], c));
-  const ms = await MovingStokes.create(device, lmax, { re: s.re, dt: s.dt, gmres: GMRES });
+  const ms = await MovingStokes.create(device, lmax, { re: s.re, be: s.bending ? s.be : Infinity, dt: s.dt, gmres: GMRES });
   const ops = (n: keyof MovingStokes['fns']) => ms.fns[n].describe().length;
   log(`  stokes.m compiles to: setup ${ops('setup')}, rhs ${ops('rhs')}, matvec ${ops('matvec')}, advance ${ops('advance')} GPU operations`);
   const fromCpp = (packed: Float64Array) =>
@@ -139,4 +139,48 @@ async function stepChecks(device: GPUDevice, check: Check, log: Log, dump: Retur
   const msPerStep = (performance.now() - t0) / s.nsteps;
   log(`  ${label}, ${s.nsteps} steps: ${(its / s.nsteps).toFixed(1)} GMRES its/step (C++ at tol 1e-12: ${s.iterations_mean}), ${msPerStep.toFixed(0)} ms/step`);
   ms.destroy();
+}
+const JVP_CHECK = `
+function [J1, J2, J3] = jvpcheck(Y1, Y2, Y3, sxt1, sxt2, sxt3, xp1, xp2, xp3, sxtt1, sxtt2, sxtt3, sxtp1, sxtp2, sxtp3, xpp1, xpp2, xpp3, ct, st, H, K, n1, n2, n3, dp1, p2, dq2, jinv, ba, bb, braw, bvc, lam, filtf, real0, keep, bscale)
+  [J1, J2, J3] = bendjvp(Y1, Y2, Y3, sxt1, sxt2, sxt3, xp1, xp2, xp3, sxtt1, sxtt2, sxtt3, sxtp1, sxtp2, sxtp3, xpp1, xpp2, xpp3, ct, st, H, K, n1, n2, n3, dp1, p2, dq2, jinv, ba, bb, braw, bvc, lam, filtf, real0, keep, bscale);
+end
+`;
+
+/** Bending on the rotating perturbed sphere: the force and its derivative
+ *  along a random displacement, then the steps, against the C++ with bending on
+ *  (test/fixtures/bending-perturbed-cpu-L12). */
+export async function bendingChecks(device: GPUDevice, check: Check, log: Log): Promise<void> {
+  const dump = readDump(new URL('./fixtures/bending-perturbed-cpu-L12/', import.meta.url));
+  const s = dump.scalars;
+  const lmax = s.lmax;
+  const cfg = productConfig(lmax);
+  const work = { lmax, mmax: lmax };
+  const prod = { lmax: cfg.lmax, mmax: cfg.mmax };
+  const nlm = ((lmax + 1) * (lmax + 2)) / 2;
+  const field = (a: Float64Array, c: number) =>
+    relayoutCoeffs(new Float32Array(a.subarray(2 * c * nlm, 2 * (c + 1) * nlm)), work, prod);
+  const fields = (name: string, n: number) => Array.from({ length: n }, (_, c) => field(dump.arrays[name], c));
+
+  const ms = await MovingStokes.create(device, lmax, { re: s.re, be: s.be, dt: s.dt, gmres: GMRES });
+  ms.setSurface(fields('X0', 3));
+  await ms.prepare(fields('u0', 3));
+  const bf = await ms.fns.bendlin.readMany(['BF1', 'BF2', 'BF3']);
+  const eF = relL2(ms.pack(bf), ms.pack(fields('bforce', 3)));
+
+  const spec: Binding = { kind: 'tensor', shape: [2, ((cfg.lmax + 1) * (cfg.lmax + 2)) / 2] };
+  const jvp = await ms.compile(JVP_CHECK, 'jvpcheck', 3, { Y1: spec, Y2: spec, Y3: spec });
+  jvp.setParams({ bscale: -2 / s.be });
+  fields('y', 3).forEach((f, c) => jvp.upload(`Y${c + 1}`, f));
+  jvp.run();
+  const jy = await jvp.readMany(['J1', 'J2', 'J3']);
+  const eJ = relL2(ms.pack(jy), ms.pack(fields('jy', 3)));
+  log(`  bendjvp: ${jvp.describe().length} GPU operations; bendlin ${ms.fns.bendlin.describe().length}`);
+  check(
+    `bending: force and its derivative along a random displacement match the C++ (Be ${s.be}), rel L2`,
+    eF < 1e-5 && eJ < 1e-4,
+    `force ${fmt(eF)}, derivative ${fmt(eJ)}`,
+  );
+  jvp.destroy();
+  ms.destroy();
+  await stepChecks(device, check, log, dump, `rotating perturbed sphere with bending (Be ${s.be})`);
 }

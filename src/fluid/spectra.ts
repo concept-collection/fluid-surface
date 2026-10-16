@@ -24,6 +24,8 @@ export interface SpectralMasks {
   ilam: Float32Array;
   /** As keep, without the working band's top two degrees (l < lmax - 1). */
   cutv: Float32Array;
+  /** 1 except the imaginary part of m = 0, at every degree. */
+  real0: Float32Array;
 }
 
 export function spectralMasks(cfg: ShtConfig, lmax: number): SpectralMasks {
@@ -36,6 +38,7 @@ export function spectralMasks(cfg: ShtConfig, lmax: number): SpectralMasks {
     e0: new Float32Array(n),
     ilam: new Float32Array(n),
     cutv: new Float32Array(n),
+    real0: new Float32Array(n),
   };
   for (let m = 0; m <= cfg.mmax; m++) {
     for (let l = m; l <= cfg.lmax; l++) {
@@ -48,6 +51,7 @@ export function spectralMasks(cfg: ShtConfig, lmax: number): SpectralMasks {
         out.filtf[k] = l < cfg.lmax - 2 ? 1 : 0;
         out.ilam[k] = l > 0 ? 1 / (l * (l + 1)) : 0;
         out.cutv[k] = l < lmax - 1 && realPart ? 1 : 0;
+        out.real0[k] = realPart ? 1 : 0;
       }
     }
   }

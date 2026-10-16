@@ -7,11 +7,7 @@
 % This is the C++ solver's FluidGeometryBuild and KFGeometry.
 %
 % The coefficients must be zero-padded to a band at least two above their
-% content, so that the theta derivatives below stay in band. Every derivative
-% is taken in coefficient space and then synthesized: dthetac gives
-% sin(theta) dtheta, dphic gives dphi, and
-%
-%   sin(theta)^2 dtheta^2 u = (sin(theta) dtheta)^2 u - cos(theta) sin(theta) dtheta u.
+% content, so that the theta derivatives (lib/posderivs.m) stay in band.
 %
 % ct and st are cos(theta) and sin(theta) on the grid.
 %
@@ -20,23 +16,14 @@
 % are realsqrt.
 
 function [vt1, vt2, vt3, vp1, vp2, vp3, n1, n2, n3, H, K, sqrtg, dp1, p2, dq2, jinv] = geometry(X1, X2, X3, ct, st)
-  T1 = dthetac(X1);
-  T2 = dthetac(X2);
-  T3 = dthetac(X3);
-  P1 = dphic(X1);
-  P2 = dphic(X2);
-  P3 = dphic(X3);
-  % sin(theta) x_theta and x_phi
-  [sxt1, sxt2, sxt3, xp1, xp2, xp3] = synth(T1, T2, T3, P1, P2, P3);
-  % (sin(theta) dtheta)^2 x, sin(theta) x_theta_phi and x_phi_phi
-  [tt1, tt2, tt3, sxtp1, sxtp2, sxtp3, xpp1, xpp2, xpp3] = synth(dthetac(T1), dthetac(T2), dthetac(T3), dphic(T1), dphic(T2), dphic(T3), dphic(P1), dphic(P2), dphic(P3));
+  [sxt1, sxt2, sxt3, xp1, xp2, xp3, sxtt1, sxtt2, sxtt3, sxtp1, sxtp2, sxtp3, xpp1, xpp2, xpp3] = posderivs(X1, X2, X3, ct);
 
   xt1 = sxt1 ./ st;
   xt2 = sxt2 ./ st;
   xt3 = sxt3 ./ st;
-  xtt1 = (tt1 - ct .* sxt1) ./ st.^2;
-  xtt2 = (tt2 - ct .* sxt2) ./ st.^2;
-  xtt3 = (tt3 - ct .* sxt3) ./ st.^2;
+  xtt1 = sxtt1 ./ st.^2;
+  xtt2 = sxtt2 ./ st.^2;
+  xtt3 = sxtt3 ./ st.^2;
   xtp1 = sxtp1 ./ st;
   xtp2 = sxtp2 ./ st;
   xtp3 = sxtp3 ./ st;

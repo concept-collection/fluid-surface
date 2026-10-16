@@ -3,7 +3,8 @@
    radial, spheroidal and toroidal potentials and back (FluidCartesianToQst,
    FluidQstToCartesian), the preconditioned operator on a random vector, the preconditioned
    right-hand side, the state after one step and after nsteps steps, in the solver's ref_dump
-   format. Packed vectors are the solver's real embedding (FluidOpPack); spectra are on the
+   format. With bending, also the bending force at the initial surface and its derivative along
+   a random displacement (FluidBendingJvp). Packed vectors are the solver's real embedding (FluidOpPack); spectra are on the
    working band.
 
      step_dump <out_dir> <example> <lmax> <factor> <nlat_f> <nphi_f> <dt> <re> <be> <bending>
@@ -20,6 +21,7 @@
 
 #include "backend_init.h"
 #include "backend_mem.h"
+#include "fluid_bending.h"
 #include "fluid_examples.h"
 #include "fluid_grid.h"
 #include "fluid_op.h"
@@ -139,6 +141,18 @@ int main(int argc, char **argv)
   wr.array("Az", Down(d_az, n).data(), n, false, sn);
   wr.array("b", Down(d_b, n).data(), n, false, sn);
   wr.array("X0", Down(s[0].d_x, 3 * nc).data(), 3 * g.nlm, true, "3," + sp);
+  if (bending) {
+    const std::vector<double> y = RandomSpectra(rng, lmax, 3);
+    breal *d_y = BufAlloc(3 * nc), *d_jy = BufAlloc(3 * nc);
+    BufUpload(d_y, y.data(), 3 * nc, NULL);
+    FluidBendingJvp(&g, &st.op.geo, &st.op.w, &st.op.lin, d_y, d_jy);
+    BackendDeviceSync();
+    wr.array("bforce", Down(st.op.d_bforce, 3 * nc).data(), 3 * g.nlm, true, "3," + sp);
+    wr.array("y", y.data(), 3 * g.nlm, true, "3," + sp);
+    wr.array("jy", Down(d_jy, 3 * nc).data(), 3 * g.nlm, true, "3," + sp);
+    BufFree(d_y);
+    BufFree(d_jy);
+  }
   wr.array("u0", Down(s[0].d_u, 3 * nc).data(), 3 * g.nlm, true, "3," + sp);
 
   int cur = 0, nxt = 1, its1 = 0, its_total = 0;

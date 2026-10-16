@@ -1,12 +1,13 @@
 /**
- * Time steps of the fluid solver on a moving surface, without bending or the
- * volume constraint (models/stokes.m): BDF-1, solved by GMRES
+ * Time steps of the fluid solver on a moving surface, with bending and
+ * without the volume constraint (models/stokes.m): BDF-1, solved by GMRES
  * (src/fluid/gmres.ts) on the preconditioned operator, after which the surface
  * moves with the fluid's normal velocity.
  *
- * Per step: lib/geometry.m on the current surface, setup (the transport
- * velocity, and the area, which the host reads to build the sphere's
- * per-degree blocks), rhs, GMRES on matvec, and advance, whose new position
+ * Per step: lib/geometry.m and lib/posderivs.m on the current surface, setup
+ * (the transport velocity, and the area, which the host reads to build the
+ * sphere's per-degree blocks), bendlin (the bending force and what its
+ * derivative reuses), rhs, GMRES on matvec, and advance, whose new position
  * is copied back into the buffers geometry reads. The position stays on the
  * GPU; the velocity and pressure come back to the host for GMRES.
  */
@@ -23,27 +24,35 @@ import { sphereBlockTables } from './sphereBlocks.ts';
 import { gmres, type GmresOptions } from './gmres.ts';
 import type { StepInfo } from './staticStokes.ts';
 import geometrySource from '../../lib/geometry.m?raw';
+import posderivsSource from '../../lib/posderivs.m?raw';
 import modelSource from '../../models/stokes.m?raw';
 
 export interface MovingStokesParams {
   re: number;
+  /** Bending number; Infinity turns bending off. */
+  be: number;
   dt: number;
   gmres: GmresOptions;
 }
 
-const GEOMETRY_FED = ['vt1', 'vt2', 'vt3', 'vp1', 'vp2', 'vp3', 'n1', 'n2', 'n3', 'H', 'sqrtg', 'jinv'];
+const GEOMETRY_FED = ['vt1', 'vt2', 'vt3', 'vp1', 'vp2', 'vp3', 'n1', 'n2', 'n3', 'H', 'K', 'sqrtg', 'dp1', 'p2', 'dq2', 'jinv'];
+/** The position's derivative fields (lib/posderivs.m), which the bending force's derivative reuses. */
+const DERIVS = ['sxt', 'xp', 'sxtt', 'sxtp', 'xpp'].flatMap((n) => [1, 2, 3].map((c) => `${n}${c}`));
+const BENDLIN_FED = ['BF1', 'BF2', 'BF3', 'ba', 'bb', 'braw', 'bvc'];
 const TABLES = ['i11', 'i12', 'i13', 'i21', 'i22', 'i23', 'i31', 'i32', 'i33', 'itor'];
 
 export class MovingStokes {
   readonly lmax: number;
   readonly cfg: ShtConfig;
   readonly prm: MovingStokesParams;
-  readonly fns: Record<'geometry' | 'setup' | 'rhs' | 'matvec' | 'advance', GpuFunction>;
+  readonly fns: Record<'geometry' | 'posderivs' | 'setup' | 'bendlin' | 'rhs' | 'matvec' | 'advance', GpuFunction>;
   /** The area at the last step's start. */
   area = 0;
   #sht: ShtPlan;
   #deriv: DerivPlan;
   #host: HostBuffers;
+  #bindings: Record<string, Binding> = {};
+  #device!: GPUDevice;
   #idx: Int32Array;
   #nlm2: number;
 
@@ -68,15 +77,19 @@ export class MovingStokes {
     const spec: Binding = { kind: 'tensor', shape: [2, sht.nlm] };
     const grid: Binding = { kind: 'tensor', shape: [cfg.nlat * cfg.nphi, 1] };
     const param: Binding = { kind: 'param' };
-    const bindings: Record<string, Binding> = { mass: param, visc: param, dt: param };
-    for (const n of ['X1', 'X2', 'X3', 'U1', 'U2', 'U3', 'Z1', 'Z2', 'Z3', 'Z4',
-      'keep', 'clean', 'filtf', 'ilam', 'cutv', ...TABLES]) bindings[n] = spec;
-    for (const n of ['ct', 'st', 'cp', 'sp', 'wq', 'v1', 'v2', 'v3', ...GEOMETRY_FED]) bindings[n] = grid;
+    const bindings: Record<string, Binding> = { mass: param, visc: param, dt: param, disp: param, bscale: param };
+    for (const n of ['X1', 'X2', 'X3', 'U1', 'U2', 'U3', 'Z1', 'Z2', 'Z3', 'Z4', 'BF1', 'BF2', 'BF3',
+      'keep', 'clean', 'filtf', 'ilam', 'cutv', 'lam', 'real0', ...TABLES]) bindings[n] = spec;
+    for (const n of ['ct', 'st', 'cp', 'sp', 'wq', 'v1', 'v2', 'v3', 'ba', 'bb', 'braw', 'bvc', ...GEOMETRY_FED, ...DERIVS])
+      bindings[n] = grid;
+    const fed = (names: string[]) => Object.fromEntries(names.map((n) => [n, n]));
     const make = (source: string, name: string, nargout: number, feedback?: Record<string, string>) =>
       GpuFunction.create({ device, sht, deriv, bindings, host, libs: operatorLibs, source, name, nargout, feedback });
     const fns = {
-      geometry: await make(geometrySource, 'geometry', 16, Object.fromEntries(GEOMETRY_FED.map((n) => [n, n]))),
+      geometry: await make(geometrySource, 'geometry', 16, fed(GEOMETRY_FED)),
+      posderivs: await make(posderivsSource, 'posderivs', 15, fed(DERIVS)),
       setup: await make(modelSource, 'setup', 4, { v1: 'v1', v2: 'v2', v3: 'v3' }),
+      bendlin: await make(modelSource, 'bendlin', 7, fed(BENDLIN_FED)),
       rhs: await make(modelSource, 'rhs', 4),
       matvec: await make(modelSource, 'matvec', 4),
       advance: await make(modelSource, 'advance', 3, { Y1: 'X1', Y2: 'X2', Y3: 'X3' }),
@@ -86,7 +99,19 @@ export class MovingStokes {
     for (const [name, data] of Object.entries(frame)) up(name, data);
     up('wq', chartWeights(cfg));
     for (const [name, data] of Object.entries(spectralMasks(cfg, lmax))) up(name, data);
-    return new MovingStokes(lmax, cfg, prm, sht, deriv, host, fns);
+    const ms = new MovingStokes(lmax, cfg, prm, sht, deriv, host, fns);
+    ms.#bindings = bindings;
+    ms.#device = device;
+    return ms;
+  }
+
+  /** Compiles another function against this stepper's buffers, so it can take
+   *  the step's geometry and tables by name (for checks). */
+  compile(source: string, name: string, nargout: number, extra: Record<string, Binding> = {}): Promise<GpuFunction> {
+    return GpuFunction.create({
+      device: this.#device, sht: this.#sht, deriv: this.#deriv, host: this.#host, libs: operatorLibs,
+      bindings: { ...this.#bindings, ...extra }, source, name, nargout,
+    });
   }
 
   /** Sets the surface from its position's product-band coefficients. */
@@ -123,13 +148,16 @@ export class MovingStokes {
     const f = this.fns;
     U.forEach((u, c) => this.#host.upload(`U${c + 1}`, u));
     f.geometry.run();
+    f.posderivs.run();
     f.setup.run();
     this.area = (await f.setup.read('area'))[0];
     const R = Math.sqrt(this.area / (4 * Math.PI));
-    const tables = sphereBlockTables(this.cfg, { mass: 1 / dt, disp: dt, re, be: Infinity, R });
+    const { be } = this.prm;
+    const tables = sphereBlockTables(this.cfg, { mass: 1 / dt, disp: dt, re, be, R });
     for (const name of TABLES) this.#host.upload(name, tables[name]);
-    const params = { mass: 1 / dt, visc: 2 / re, dt };
-    for (const fn of [f.rhs, f.matvec, f.advance]) fn.setParams(params);
+    const params = { mass: 1 / dt, visc: 2 / re, dt, disp: dt, bscale: Number.isFinite(be) ? -2 / be : 0 };
+    for (const fn of [f.bendlin, f.rhs, f.matvec, f.advance]) fn.setParams(params);
+    f.bendlin.run();
     f.rhs.run();
     return this.pack(await f.rhs.readMany(['B1', 'B2', 'B3', 'BP']));
   }

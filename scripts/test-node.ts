@@ -12,7 +12,7 @@ import { installWebGpu, errMsg, NO_ADAPTER_HINT } from './nodeWebGpu.ts';
 import { sphtorChecks } from '../test/sphtorChecks.ts';
 import { geometryChecks } from '../test/geometryChecks.ts';
 import { stokesChecks } from '../test/stokesChecks.ts';
-import { movingChecks } from '../test/movingChecks.ts';
+import { movingChecks, bendingChecks } from '../test/movingChecks.ts';
 
 let failures = 0;
 const check = (name: string, ok: boolean, detail: string): void => {
@@ -45,6 +45,7 @@ const suites: [string, (d: GPUDevice, c: typeof check, l: typeof log) => Promise
   ['geometry', geometryChecks],
   ['stokes', stokesChecks],
   ['moving', movingChecks],
+  ['bending', bendingChecks],
 ];
 for (const [name, run] of suites) if (!only || only === name) await run(device, check, log);
 
