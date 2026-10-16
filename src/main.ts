@@ -254,7 +254,7 @@ function draw(): void {
     `volume ${L.volume.toPrecision(6)} (drift ${((L.volume - r.volume0) / r.volume0).toExponential(1)}) &middot; ` +
     `multiplier ${r.state.lam.toPrecision(4)}${arrows}<br>` +
     `lmax ${r.lmax}, products at lmax ${lmax} on ${nlat} x ${nphi}, dt ${r.dt} &middot; ` +
-    (r.step ? `${L.its} GMRES iterations, ${L.ms.toFixed(0)} ms per step` : 'at rest') +
+    (r.step ? `${L.its} GMRES iterations, ${stepsPerSecond().toFixed(1)} steps per second` : 'at rest') +
     (L.converged ? '' : ' &middot; <span class="warn">GMRES did not reach its tolerance</span>');
 }
 
@@ -265,6 +265,7 @@ async function advance(): Promise<void> {
   r.state = res.state;
   r.step++;
   const ms = performance.now() - t0;
+  if (playing) finished.push(performance.now());
   await observe(res.info.iterations, ms, res.info.converged);
   draw();
 }
@@ -284,11 +285,24 @@ async function profile(): Promise<void> {
   out.textContent = [`profile of step ${r.step}, lmax ${r.lmax}${ts}:`, ...formatProfile(p)].join('\n');
 }
 
+/** When the last steps of the current play finished (ms), for the rate. */
+const finished: number[] = [];
+
+/** Steps per second: while playing, the rate of the last few seconds, which
+ *  includes drawing; otherwise from the last step's own time. */
+function stepsPerSecond(): number {
+  const now = performance.now();
+  while (finished.length > 2 && now - finished[0] > 5000) finished.shift();
+  if (playing && finished.length >= 3) return (1000 * (finished.length - 1)) / (finished[finished.length - 1] - finished[0]);
+  return run && run.last.ms > 0 ? 1000 / run.last.ms : 0;
+}
+
 /** The run loop: one step per frame while playing. */
 let busy = false;
 async function loop(): Promise<void> {
   if (busy) return;
   busy = true;
+  finished.length = 0;
   try {
     while (playing && run) {
       await advance();
