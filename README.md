@@ -4,7 +4,7 @@ Fluid deformable surfaces in the browser: incompressible surface Navier-Stokes w
 
 The solver being ported is Dan Fortunato's C++ implementation in meliao/evolving_surface (cpu, CUDA and Metal backends). This is the sibling of [turing-surface](https://github.com/concept-collection/turing-surface), which solves reaction-diffusion on a fixed surface, and it starts from that project's transforms and compiler pipeline. The difference that keeps them apart is that here the geometry changes every step and each step is a saddle-point solve run to a tolerance, where turing-surface's design assumes a fixed surface and a fixed sequence of GPU operations.
 
-**Status:** steps 1 and 2 of 6 (the vector analysis and the surface geometry). There is no app yet, only the checks.
+**Status:** steps 1 and 2 of 6 (the vector analysis and the surface geometry), and a first page that shows the geometry. No fluid yet.
 
 ## Plan
 
@@ -79,6 +79,16 @@ scripts/cpp/build.sh <evolving_surface>/cpp <evolving_surface>/cpp/build-cpu
 <evolving_surface>/cpp/build-cpu/geometry_dump test/fixtures/geometry-cpu-perturbed-L12 perturbed_sphere 12 2 26 64 0.4
 ```
 
+### The page
+
+```bash
+npm run dev
+```
+
+The page shows Krause & Voigt's perturbed sphere coloured by H, K or the area element, as `lib/geometry.m` computes them on the GPU, with sliders for r0 and the working band. It also lists the `.m` source beside the GPU operations it compiles to. The position's coefficients are built on the host in f64, as the C++ solver builds them; the geometry takes 3 to 9 ms per call on Dawn in the browser (Intel Iris Xe), including the submit. The rendering is turing-surface's (`src/render/`, adapted from figpack's SphereEmbedding view).
+
+On the unit sphere, H is 1 to within 5e-7 away from the poles, but within only 4e-5 (band 24) to 9e-5 (band 32) on the latitude ring nearest each pole, against 5e-6 at bands 16 and 48. The x_thetatheta term is `(tt - ct .* sxt) ./ st.^2`, a difference of two small values divided by sin(theta)^2, and fp32 cancellation there is presumably the cause; the C++ formula has the same division. The checks above, at bands 12 and 16, do not see it. Whether it matters to the fluid solver, whose bending force is built on H, is a question for step 4. The flux-form weights `dp1, p2, dq2, jinv` avoid this division by construction.
+
 ## Where numbl needed help
 
 This list records each place the MATLAB could not say what was meant, or the compiler did less than it should, since that is what a numbl paper has to report.
@@ -108,6 +118,7 @@ python scripts/shtns_sphtor_fixture.py -lmax 16
 - `lib/`: the MATLAB operators, compiled by numbl.
 - `src/sht/`: the WebGPU spherical-harmonic transforms and coefficient shuffles, vendored from [shtns-webgpu](https://github.com/concept-collection/shtns-webgpu) by way of turing-surface, plus `dthetat`. `reference.ts` is the f64 CPU twin used by the tests.
 - `src/mgpu/`: the MATLAB-to-WebGPU pipeline from turing-surface (numbl lowering, planning, WGSL generation). `gpuFunction.ts` compiles one `.m` function into something the host can call.
+- `src/geom/`: the geometry on the GPU and the example surfaces. `src/render/`, `src/main.ts`, `index.html`: the page.
 - `test/`, `scripts/`: the checks and their runner; `scripts/cpp/` holds the tool that writes the C++ reference.
 
 ## The numbl dependency
@@ -116,4 +127,4 @@ numbl is a local `file:../../numbl` dependency, so a sibling checkout of numbl i
 
 ## Provenance and license
 
-`src/sht`, `src/mgpu`, `src/tools.ts` and `tools/` were copied from turing-surface at `167fa88`; the first commit here is that copy unchanged. Since then: `dthetat`, `realsqrt` in the WGSL builtin table, and the storage-buffer limit requested from the adapter. CECILL-2.1, inherited from SHTns through shtns-webgpu.
+`src/sht`, `src/mgpu`, `src/tools.ts`, `tools/` and (later) four files of `src/render` were copied from turing-surface at `167fa88`; the first commit here is that copy unchanged. Since then: `dthetat`, `realsqrt` in the WGSL builtin table, and the storage-buffer limit requested from the adapter. CECILL-2.1, inherited from SHTns through shtns-webgpu.

@@ -1,0 +1,101 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><circle cx=%2250%22 cy=%2250%22 r=%2244%22 fill=%22%233b6fb6%22/><path d=%22M18 52 C34 30 66 74 82 48%22 stroke=%22%23f2f4f7%22 stroke-width=%227%22 fill=%22none%22/></svg>" />
+    <title>fluid-surface</title>
+    <style>
+      :root {
+        --bg: #ffffff;
+        --ink: #1f2328;
+        --ink-2: #57606a;
+        --line: #d0d7de;
+        --accent: #0969da;
+        --sphere-bg: #f4f6f8;
+        color-scheme: light dark;
+      }
+      @media (prefers-color-scheme: dark) {
+        :root {
+          --bg: #14171a;
+          --ink: #e6e9ec;
+          --ink-2: #9aa4af;
+          --line: #333b44;
+          --accent: #58a6ff;
+          --sphere-bg: #14161c;
+        }
+      }
+      body {
+        margin: 0;
+        background: var(--bg);
+        color: var(--ink);
+        font: 15px/1.5 system-ui, -apple-system, sans-serif;
+      }
+      main { max-width: 1100px; margin: 0 auto; padding: 20px 16px 48px; }
+      h1 { font-size: 20px; margin: 0 0 2px; }
+      .sub { color: var(--ink-2); margin: 0 0 12px; font-size: 13px; }
+      .sub a { color: var(--accent); }
+      .controls { display: flex; flex-wrap: wrap; gap: 8px 14px; align-items: center; padding: 6px 0; }
+      .controls label { color: var(--ink-2); font-size: 13px; white-space: nowrap; }
+      select, button {
+        font: inherit; font-size: 13px; color: var(--ink); background: var(--bg);
+        border: 1px solid var(--line); border-radius: 6px; padding: 4px 8px;
+      }
+      input[type="range"] { width: 10em; vertical-align: middle; accent-color: var(--accent); }
+      .val { font-variant-numeric: tabular-nums; color: var(--ink); }
+      #panels { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; }
+      .panel {
+        flex: 1 1 320px; min-width: 280px; max-width: 720px;
+        border: 1px solid var(--line); border-radius: 8px; overflow: hidden; display: flex;
+      }
+      .sphere-box { flex: 1; aspect-ratio: 1 / 1; max-height: 70vh; position: relative; }
+      .colorbar {
+        display: flex; flex-direction: column; align-items: center; justify-content: center;
+        gap: 4px; padding: 8px 4px; background: var(--sphere-bg);
+        width: 52px; flex: none; box-sizing: border-box;
+      }
+      .colorbar canvas { border: 1px solid var(--line); border-radius: 2px; }
+      .colorbar-label { font-size: 11px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+      .stats { margin-top: 10px; font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
+      .stats b { color: var(--ink); font-weight: 600; }
+      #err { color: #b35900; white-space: pre-wrap; font-size: 13px; }
+      details.src { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
+      details.src > summary { cursor: pointer; padding: 6px 10px; font-size: 13px; color: var(--ink-2); background: var(--sphere-bg); }
+      .src-body { display: flex; flex-wrap: wrap; }
+      .src-body pre {
+        flex: 1 1 380px; margin: 0; padding: 8px 10px; max-height: 32em; overflow: auto;
+        font: 12px/1.5 ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+        color: var(--ink); border-top: 1px solid var(--line);
+      }
+      .src-body pre + pre { border-left: 1px solid var(--line); }
+    </style>
+  </head>
+  <body>
+    <main>
+      <h1>fluid-surface</h1>
+      <p class="sub">
+        The surface geometry of Krause &amp; Voigt's perturbed sphere, r = 1 + r0 cos(phi) sin(3 theta), computed on the GPU by <code>lib/geometry.m</code>, compiled to WebGPU by numbl. Step 2 of a port of a fluid deformable surface solver to the browser.
+        <a href="https://github.com/concept-collection/fluid-surface">Source</a>.
+      </p>
+      <div class="controls">
+        <label>field <select id="field"></select></label>
+        <label>r0 <input id="r0" type="range" min="0" max="0.6" step="0.01" value="0.4" /> <span id="r0val" class="val"></span></label>
+        <label>working band <select id="band"></select></label>
+        <button id="reset">Reset view</button>
+      </div>
+      <div id="panels">
+        <div class="panel">
+          <div class="sphere-box" id="sphere"></div>
+          <div id="colorbar"></div>
+        </div>
+      </div>
+      <div class="stats" id="stats"></div>
+      <div id="err"></div>
+      <details class="src">
+        <summary>lib/geometry.m, and the GPU operations it compiles to</summary>
+        <div class="src-body"><pre id="source"></pre><pre id="ops"></pre></div>
+      </details>
+    </main>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

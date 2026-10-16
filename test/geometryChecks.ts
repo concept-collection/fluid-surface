@@ -10,68 +10,24 @@
  *    scripts/cpp/geometry_dump.cpp).
  */
 import { readFileSync } from 'node:fs';
-import { ShtPlan } from '../src/sht/sht.ts';
-import { DerivPlan } from '../src/sht/deriv.ts';
 import { ShtReference } from '../src/sht/reference.ts';
 import { gridForLmax, relayoutCoeffs, type ShtConfig } from '../src/sht/layout.ts';
 import { gaussNodesWeights } from '../src/sht/gauss.ts';
-import { GpuFunction } from '../src/mgpu/gpuFunction.ts';
-import geometrySource from '../lib/geometry.m?raw';
+import { GEOMETRY_OUTPUTS, SurfaceGeometry } from '../src/geom/geometry.ts';
 import { relL2, fmt, type Check, type Log } from './check.ts';
 
-const OUTPUTS = [
-  'vt1', 'vt2', 'vt3', 'vp1', 'vp2', 'vp3', 'n1', 'n2', 'n3',
-  'H', 'K', 'sqrtg', 'dp1', 'p2', 'dq2', 'jinv',
-] as const;
-
-/** cos(theta) and sin(theta) on the grid, from the f64 Gauss nodes. */
-function trig(cfg: ShtConfig): { ct: Float32Array; st: Float32Array } {
-  const { x } = gaussNodesWeights(cfg.nlat);
-  const ct = new Float32Array(cfg.nlat * cfg.nphi);
-  const st = new Float32Array(cfg.nlat * cfg.nphi);
-  for (let i = 0; i < cfg.nlat; i++) {
-    ct.fill(x[i], i * cfg.nphi, (i + 1) * cfg.nphi);
-    st.fill(Math.sqrt(1 - x[i] * x[i]), i * cfg.nphi, (i + 1) * cfg.nphi);
-  }
-  return { ct, st };
-}
+const OUTPUTS = GEOMETRY_OUTPUTS;
 
 async function compileGeometry(device: GPUDevice, cfg: ShtConfig) {
-  const sht = await ShtPlan.create(device, cfg);
-  const deriv = await DerivPlan.create(device, sht);
-  const npts = cfg.nlat * cfg.nphi;
-  const fn = await GpuFunction.create({
-    device,
-    sht,
-    deriv,
-    source: geometrySource,
-    name: 'geometry',
-    bindings: {
-      X1: { kind: 'tensor', shape: [2, sht.nlm] },
-      X2: { kind: 'tensor', shape: [2, sht.nlm] },
-      X3: { kind: 'tensor', shape: [2, sht.nlm] },
-      ct: { kind: 'tensor', shape: [npts, 1] },
-      st: { kind: 'tensor', shape: [npts, 1] },
-    },
-    nargout: OUTPUTS.length,
-  });
-  const { ct, st } = trig(cfg);
-  fn.upload('ct', ct);
-  fn.upload('st', st);
+  const geo = await SurfaceGeometry.create(device, cfg);
   /** Runs on product-band coefficients and reads every output back. */
   const run = async (X: Float32Array[]): Promise<Record<string, Float32Array>> => {
-    X.forEach((x, c) => fn.upload(`X${c + 1}`, x));
-    fn.run();
+    geo.compute(X);
     const out: Record<string, Float32Array> = {};
-    for (const name of OUTPUTS) out[name] = await fn.read(name);
+    for (const name of OUTPUTS) out[name] = await geo.read(name);
     return out;
   };
-  const destroy = (): void => {
-    fn.destroy();
-    deriv.destroy();
-    sht.destroy();
-  };
-  return { fn, run, destroy };
+  return { fn: geo.fn, run, destroy: () => geo.destroy() };
 }
 
 /** A ref_dump directory (the C++ solver's format): a manifest of f64 arrays. */
