@@ -11,6 +11,7 @@ import { requestShtDevice } from '../src/sht/sht.ts';
 import { installWebGpu, errMsg, NO_ADAPTER_HINT } from './nodeWebGpu.ts';
 import { sphtorChecks } from '../test/sphtorChecks.ts';
 import { geometryChecks } from '../test/geometryChecks.ts';
+import { stokesChecks } from '../test/stokesChecks.ts';
 
 let failures = 0;
 const check = (name: string, ok: boolean, detail: string): void => {
@@ -19,6 +20,7 @@ const check = (name: string, ok: boolean, detail: string): void => {
 };
 const log = (s: string): void => console.log(s);
 
+const only = process.argv.find((a) => a.startsWith('--only='))?.slice(7);
 const skipWithoutGpu = process.argv.includes('--skip-without-gpu');
 
 let runtime: string;
@@ -37,8 +39,12 @@ try {
 }
 console.log(`fluid-surface tests — ${runtime}\n`);
 
-await sphtorChecks(device, check, log);
-await geometryChecks(device, check, log);
+const suites: [string, (d: GPUDevice, c: typeof check, l: typeof log) => Promise<void>][] = [
+  ['sphtor', sphtorChecks],
+  ['geometry', geometryChecks],
+  ['stokes', stokesChecks],
+];
+for (const [name, run] of suites) if (!only || only === name) await run(device, check, log);
 
 console.log(failures === 0 ? '\nAll tests passed.' : `\n${failures} failed.`);
 process.exit(failures === 0 ? 0 : 1);

@@ -23,6 +23,7 @@ import { ReducePlan, type DotBinding } from './reduce.ts';
 import { exactMatrixBytes, type ExactOperator, type ExactSite } from './exact.ts';
 import type { CompiledFunction } from './compile.ts';
 import { EXTERNAL_OPS } from './externals.ts';
+import { splitWideKernels } from './split.ts';
 import {
   MODE_BUFFER,
   INITIAL_MODES,
@@ -650,7 +651,10 @@ export class ModelPlan {
     };
 
     const planned: Planned[] = [];
-    for (const stmt of fn.body) {
+    // A kernel binds its output, its inputs and the parameters; lines that
+    // read more arrays than the device allows are split (src/mgpu/split.ts).
+    const budget = device.limits.maxStorageBuffersPerShaderStage - 2;
+    for (const stmt of splitWideKernels(fn.body, budget)) {
       await planStatement(stmt);
     }
 

@@ -32,6 +32,10 @@ export interface GpuFunctionOptions {
   libs?: LibFile[];
   /** Buffers shared with other functions; a fresh pool if omitted. */
   host?: HostBuffers;
+  /** Outputs to copy into shared buffers after each call, by output name ->
+   *  buffer name, so another function can take them as arguments with no
+   *  readback. The buffers are created if the pool lacks them. */
+  feedback?: Record<string, string>;
 }
 
 export class GpuFunction {
@@ -58,8 +62,16 @@ export class GpuFunction {
     const fn = inFunction(o.name, () => compiled.specialize(o.name, o.nargout));
     compiled.finish();
     const host = o.host ?? new HostBuffers(o.device);
+    const feedback = fn.outputs.map((out) => {
+      const to = o.feedback?.[out.name];
+      if (!to) return null;
+      const shape = out.ty.kind === 'Numeric' ? out.ty.shape : undefined;
+      if (!shape) throw new Error(`${o.name}: output '${out.name}' has no static shape`);
+      host.ensure(to, shape.reduce((x: number, y: number) => x * y, 1));
+      return to;
+    });
     const plan = await inFunctionAsync(o.name, () =>
-      ModelPlan.create(o.device, o.sht, { fn, feedback: fn.outputs.map(() => null) }, host, o.deriv),
+      ModelPlan.create(o.device, o.sht, { fn, feedback }, host, o.deriv),
     );
     return new GpuFunction(o.device, plan, host, !o.host, fn.outputs.map((x) => x.name));
   }
@@ -106,6 +118,41 @@ export class GpuFunction {
       this.#device.queue.submit([enc.finish()]);
       await stage.mapAsync(GPUMapMode.READ);
       return new Float32Array(stage.getMappedRange().slice(0));
+    } finally {
+      stage.destroy();
+    }
+  }
+
+  /** Read several named values back with one copy and one wait. */
+  async readMany(names: string[]): Promise<Float32Array[]> {
+    const parts = names.map((name) => {
+      const buffer = this.buffer(name);
+      const count = this.#plan.elementCount(name) ?? this.#host.get(name)?.count;
+      if (!buffer || count === undefined) throw new Error(`readMany: no value named '${name}'`);
+      return { buffer, count };
+    });
+    const total = parts.reduce((n, p) => n + p.count, 0);
+    const stage = this.#device.createBuffer({
+      label: 'gpu-function-read-many',
+      size: 4 * total,
+      usage: GPUBufferUsage.MAP_READ | GPUBufferUsage.COPY_DST,
+    });
+    try {
+      const enc = this.#device.createCommandEncoder({ label: 'gpu-function-read-many' });
+      let offset = 0;
+      for (const p of parts) {
+        enc.copyBufferToBuffer(p.buffer, 0, stage, 4 * offset, 4 * p.count);
+        offset += p.count;
+      }
+      this.#device.queue.submit([enc.finish()]);
+      await stage.mapAsync(GPUMapMode.READ);
+      const all = new Float32Array(stage.getMappedRange().slice(0));
+      offset = 0;
+      return parts.map((p) => {
+        const out = all.subarray(offset, offset + p.count);
+        offset += p.count;
+        return out;
+      });
     } finally {
       stage.destroy();
     }

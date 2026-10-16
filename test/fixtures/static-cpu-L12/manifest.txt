@@ -1,0 +1,19 @@
+scalar lmax 12
+scalar lmax_f 24
+scalar nlat_f 26
+scalar nphi_f 64
+scalar dt 0.01
+scalar degree 2
+scalar re 1
+scalar be 2
+scalar area 12.56637061435916
+scalar mean_H2 1.0000000000000022
+scalar iterations 217
+scalar rel_resid 4.8157265283748825e-13
+array X complex128 273 3,91
+array u0 complex128 273 3,91
+array z float64 676 676
+array Az float64 676 676
+array b float64 676 676
+array u1 complex128 273 3,91
+array p1 complex128 91 91
