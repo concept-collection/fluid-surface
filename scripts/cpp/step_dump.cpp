@@ -113,7 +113,11 @@ int main(int argc, char **argv)
   FluidQstToCartesian(&st.op.pc.qst, &g, d_qst, d_back);
   BufUpload(d_spec, spec.data(), 4 * nc, NULL);
   KFFill(d_z, 0.0, n, NULL);
-  FluidOpPack(&st.op, d_spec, d_spec + 3 * nc, nullptr, d_z);
+  /* With the volume constraint, the random vector has a multiplier too. */
+  const double lam0 = 0.37;
+  breal       *d_lam0 = BufAlloc(1);
+  BufUpload(d_lam0, &lam0, 1, NULL);
+  FluidOpPack(&st.op, d_spec, d_spec + 3 * nc, d_lam0, d_z);
   FluidOpMatvec(&st.op, d_z, d_az);
   BufCopy(d_hist, s[0].d_u, 3 * nc, NULL);
   KScale(d_hist, 1.0 / dt, 3 * nc, NULL);
@@ -134,6 +138,14 @@ int main(int argc, char **argv)
   wr.scalar("nsteps", nsteps);
   wr.scalar("r0", r0);
   wr.scalar("area", st.op.pc.area);
+  wr.scalar("volume", prm.volume);
+  if (prm.volume) {
+    wr.scalar("M00", st.op.pc.M[0][0]);
+    wr.scalar("M01", st.op.pc.M[0][1]);
+    wr.scalar("M10", st.op.pc.M[1][0]);
+    wr.scalar("M11", st.op.pc.M[1][1]);
+    wr.scalar("use_block", st.op.pc.use_block);
+  }
   wr.array("cart", cart.data(), 3 * g.nlm, true, "3," + sp);
   wr.array("qst", Down(d_qst, 3 * nc).data(), 3 * g.nlm, true, "3," + sp);
   wr.array("cart_back", Down(d_back, 3 * nc).data(), 3 * g.nlm, true, "3," + sp);
@@ -166,6 +178,7 @@ int main(int argc, char **argv)
       wr.array("X1", Down(s[cur].d_x, 3 * nc).data(), 3 * g.nlm, true, "3," + sp);
       wr.array("u1", Down(s[cur].d_u, 3 * nc).data(), 3 * g.nlm, true, "3," + sp);
       wr.array("p1", Down(s[cur].d_p, nc).data(), g.nlm, true, sp);
+      wr.scalar("lam1", Down(s[cur].d_lam, 1)[0]);
     }
   }
   wr.scalar("iterations1", its1);
@@ -173,13 +186,14 @@ int main(int argc, char **argv)
   wr.array("XN", Down(s[cur].d_x, 3 * nc).data(), 3 * g.nlm, true, "3," + sp);
   wr.array("uN", Down(s[cur].d_u, 3 * nc).data(), 3 * g.nlm, true, "3," + sp);
   wr.array("pN", Down(s[cur].d_p, nc).data(), g.nlm, true, sp);
+  wr.scalar("lamN", Down(s[cur].d_lam, 1)[0]);
   if (!wr.finish()) return 1;
   std::printf("wrote %s: %s, lmax %d, product band %d on %d x %d, n %ld, %d steps, %d its at step "
               "1, %.1f mean\n",
               dir.c_str(), example.c_str(), g.lmax, g.lmax_f, g.nlat_f, g.nphi_f, n, nsteps, its1,
               (double)its_total / nsteps);
 
-  for (breal *d : {d_cart, d_qst, d_back, d_spec, d_z, d_az, d_b, d_hist, d_yk}) BufFree(d);
+  for (breal *d : {d_cart, d_qst, d_back, d_spec, d_z, d_az, d_b, d_hist, d_yk, d_lam0}) BufFree(d);
   FluidStepperDestroy(&st);
   for (auto &x : s) FluidStateDestroy(&x);
   FluidGridDestroy(&g);

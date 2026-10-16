@@ -4,14 +4,14 @@ Fluid deformable surfaces in the browser: incompressible surface Navier-Stokes w
 
 The solver being ported is Dan Fortunato's C++ implementation in meliao/evolving_surface (cpu, CUDA and Metal backends). This is the sibling of [turing-surface](https://github.com/concept-collection/turing-surface), which solves reaction-diffusion on a fixed surface, and it starts from that project's transforms and compiler pipeline. The difference that keeps them apart is that here the geometry changes every step and each step is a saddle-point solve run to a tolerance, where turing-surface's design assumes a fixed surface and a fixed sequence of GPU operations.
 
-**Status:** steps 1 to 4b of 6: the vector analysis, the surface geometry (with a page that shows it), the fluid solver's static mode on a fixed surface, and a moving surface with the bending force, each checked against the C++. The volume constraint, relabeling and two phases are still to come.
+**Status:** steps 1 to 4 of 6: the vector analysis, the surface geometry (with a page that shows it), the fluid solver's static mode on a fixed surface, and a moving surface with the bending force and the volume constraint, each checked against the C++, with Krause & Voigt's perturbed sphere at band 32 compared by its energies. The solver is BDF-1 with a fixed time step; BDF-2, an adaptive step, relabeling and two phases are still to come.
 
 ## Plan
 
 1. The vector (spheroidal/toroidal) analysis from scalar transforms, against SHTns. Done; see below.
 2. The surface geometry (normal, curvatures, area element) on the GPU from the position's coefficients, against the C++ cpu backend. Done; see below.
 3. A Killing field on a fixed surface: the matvec, the static preconditioner and GMRES, against the exact BDF-1 decay rate. Done; see below.
-4. The moving surface, in three parts: (a) the operator without bending, the Stokes preconditioner and the normal-velocity update, and (b) bending, both done, see below; (c) the volume constraint, then Krause & Voigt's perturbed sphere at lmax 32 against the C++.
+4. The moving surface, in three parts: (a) the operator without bending, the Stokes preconditioner and the normal-velocity update, (b) bending, (c) the volume constraint, then Krause & Voigt's perturbed sphere at lmax 32 against the C++. Done; see below.
 5. Relabeling, then an adaptive time step.
 6. Two phases.
 
@@ -95,6 +95,10 @@ scripts/cpp/build.sh <evolving_surface>/cpp <evolving_surface>/cpp/build-cpu
 <evolving_surface>/cpp/build-cpu/step_dump test/fixtures/bending-perturbed-cpu-L12 killing 12 2 26 64 0.01 1 2 1 20 0.2
 ```
 
+```bash
+<evolving_surface>/cpp/build-cpu/step_dump test/fixtures/perturbed-cpu-L12 perturbed_sphere 12 2 26 64 0.01 1 2 1 20
+```
+
 ### The page
 
 ```bash
@@ -158,6 +162,30 @@ With bending, the matvec compiles to 255 GPU operations, 99 of them the derivati
 
 Over the 20 steps the surface moves by 6.5%. A step takes about 60 ms at band 12 in node.
 
+## The volume constraint
+
+With the constraint, the enclosed volume is held by a multiplier lam on the normal force: the momentum loses lam n, and a new row asks that the flux of the normal velocity through the surface vanish. The multiplier is one more unknown, a 1 x 1 array that the compiled functions take and return. The Stokes preconditioner (as the C++'s) solves for it first from a 2 x 2 block: the sphere velocity's response to the force of a constant pressure and to that of the multiplier, measured by the divergence's constant mode and the flux. `volblock` in `models/stokes.m` computes the block once per step with two velocity-only sphere solves and two reductions each, and the host reads its four numbers and decides, as the C++ does, whether the block is far enough from singular to use. The preconditioner then moves the multiplier's force to the right-hand side and corrects the constant modes of the pressure and the radial velocity. A plan has no branches, so whether the constraint is on and whether the block is used are parameters (`vol`, `ub`); without the constraint the multiplier's row is the identity and it stays zero.
+
+Krause & Voigt's perturbed sphere (r0 0.4, at rest, Re 1, Be 2, volume constrained), band 12, dt 0.01, against the C++, relative L2:
+
+| check | result |
+|---|---|
+| the 2 x 2 block | 2.1e-7 (used, as in the C++) |
+| operator on a random vector with a multiplier, right-hand side | 8.2e-7, 9.5e-7 |
+| after 1 and after 20 steps | X 9.1e-8 and 1.7e-7, u 3.8e-6 and 1.1e-5, p 1.6e-6 and 6.2e-7; multiplier 13.16236 (C++ 13.16239) and 9.180041 (9.180042) |
+
+At band 32 (product band 64), the same problem from rest with dt 0.005 for 100 steps, BDF-1, against `fluid_run` on the C++ cpu backend with the same settings (`-order 1 -dt 0.005 -T 0.5 -relabel_every 0`; its product grid is SHTns' choice, ours 66 x 256), with [`scripts/kv.ts`](scripts/kv.ts):
+
+| quantity | largest relative difference over the 100 steps |
+|---|---:|
+| bending energy E_h (24.11 at rest, 21.70 at t = 0.5) | 6.4e-7 |
+| area | 4.8e-7 |
+| enclosed volume | 8.3e-7 |
+| kinetic energy, relative to its peak (0.63) | 2.0e-5 |
+| position at t = 0.5 | 4.9e-7 |
+
+GMRES took 34.6 iterations per step at tol 1e-6 (the C++ 46.1 at 1e-8); a step took 0.29 s here on Dawn with an integrated GPU, against 0.19 s for the C++ on four cores. The volume drifts by 1.8e-4 over the run in both, since the constraint is on the linearized flux.
+
 ## Where numbl needed help
 
 This list records each place the MATLAB could not say what was meant, or the compiler did less than it should, since that is what a numbl paper has to report.
@@ -182,7 +210,7 @@ This list records each place the MATLAB could not say what was meant, or the com
 npm run test:node
 ```
 
-Runs [`test/sphtorChecks.ts`](test/sphtorChecks.ts), [`test/geometryChecks.ts`](test/geometryChecks.ts), [`test/stokesChecks.ts`](test/stokesChecks.ts) and [`test/movingChecks.ts`](test/movingChecks.ts) (`-- --only=bending` for one suite) on desktop WebGPU (Google Dawn, the optional `webgpu` package). The SHTns results it compares against are in [`test/fixtures/`](test/fixtures/), written by [`scripts/shtns_sphtor_fixture.py`](scripts/shtns_sphtor_fixture.py), which needs the `shtns` Python package:
+Runs [`test/sphtorChecks.ts`](test/sphtorChecks.ts), [`test/geometryChecks.ts`](test/geometryChecks.ts), [`test/stokesChecks.ts`](test/stokesChecks.ts) and [`test/movingChecks.ts`](test/movingChecks.ts) (`-- --only=volume` for one suite) on desktop WebGPU (Google Dawn, the optional `webgpu` package). The SHTns results it compares against are in [`test/fixtures/`](test/fixtures/), written by [`scripts/shtns_sphtor_fixture.py`](scripts/shtns_sphtor_fixture.py), which needs the `shtns` Python package:
 
 ```bash
 python scripts/shtns_sphtor_fixture.py -lmax 16
@@ -195,7 +223,7 @@ python scripts/shtns_sphtor_fixture.py -lmax 16
 - `src/mgpu/`: the MATLAB-to-WebGPU pipeline from turing-surface (numbl lowering, planning, WGSL generation). `gpuFunction.ts` compiles one `.m` function into something the host can call.
 - `models/`: one solver mode per file (`static_stokes.m`, `stokes.m`). `src/fluid/`: the host side, GMRES and the steppers.
 - `src/geom/`: the geometry on the GPU and the example surfaces. `src/render/`, `src/main.ts`, `index.html`: the page.
-- `test/`, `scripts/`: the checks and their runner; `scripts/cpp/` holds the tool that writes the C++ reference.
+- `test/`, `scripts/`: the checks and their runner, and `scripts/kv.ts`, the Krause & Voigt run; `scripts/cpp/` holds the tool that writes the C++ reference.
 
 ## The numbl dependency
 

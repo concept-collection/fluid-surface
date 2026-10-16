@@ -23,7 +23,7 @@ import { GpuFunction } from '../src/mgpu/gpuFunction.ts';
 import { operatorLibs } from '../src/mgpu/libs.ts';
 import type { Binding } from '../src/mgpu/compile.ts';
 import { gridFrame, productConfig } from '../src/geom/geometry.ts';
-import { MovingStokes } from '../src/fluid/movingStokes.ts';
+import { MovingStokes, type FluidState } from '../src/fluid/movingStokes.ts';
 import { spectralMasks, unpackCpp } from '../src/fluid/spectra.ts';
 import { readDump } from './dump.ts';
 import { relL2, fmt, type Check, type Log } from './check.ts';
@@ -97,30 +97,38 @@ async function stepChecks(device: GPUDevice, check: Check, log: Log, dump: Retur
   const field = (a: Float64Array, c: number) =>
     relayoutCoeffs(new Float32Array(a.subarray(2 * c * nlm, 2 * (c + 1) * nlm)), work, prod);
   const fields = (name: string, n: number) => Array.from({ length: n }, (_, c) => field(dump.arrays[name], c));
-  const ms = await MovingStokes.create(device, lmax, { re: s.re, be: s.bending ? s.be : Infinity, dt: s.dt, gmres: GMRES });
+  const volume = s.volume === 1;
+  const ms = await MovingStokes.create(device, lmax, { re: s.re, be: s.bending ? s.be : Infinity, volume, dt: s.dt, gmres: GMRES });
   const ops = (n: keyof MovingStokes['fns']) => ms.fns[n].describe().length;
   log(`  stokes.m compiles to: setup ${ops('setup')}, rhs ${ops('rhs')}, matvec ${ops('matvec')}, advance ${ops('advance')} GPU operations`);
+  // The C++'s packed vectors end with the multiplier when the volume is constrained.
+  const nr = (lmax + 1) * (lmax + 1);
   const fromCpp = (packed: Float64Array) =>
-    ms.pack(unpackCpp(packed, lmax, 4).map((c) => relayoutCoeffs(new Float32Array(c), work, prod)));
+    ms.pack(unpackCpp(packed, lmax, 4).map((c) => relayoutCoeffs(new Float32Array(c), work, prod)), volume ? packed[4 * nr] : 0);
   ms.setSurface(fields('X0', 3));
   const U0 = fields('u0', 3);
   const b = await ms.prepare(U0);
   const eB = relL2(b, fromCpp(dump.arrays.b));
-  const eA = relL2(await ms.apply(fromCpp(dump.arrays.z)), fromCpp(dump.arrays.Az));
+  const az = await ms.apply(fromCpp(dump.arrays.z));
+  const azCpp = fromCpp(dump.arrays.Az);
+  const eA = relL2(az, azCpp);
+  const block = volume
+    ? `; volume block ${fmt(relL2(ms.block, [s.M00, s.M01, s.M10, s.M11]))} (used: ${ms.useBlock}), ` +
+      `multiplier row ${az[az.length - 1].toPrecision(6)} (C++ ${azCpp[azCpp.length - 1].toPrecision(6)})`
+    : '';
   check(
     `moving: ${label}: Stokes-preconditioned operator and right-hand side match the C++ (fp32 vs f64), rel L2`,
     eA < 1e-5 && eB < 1e-5,
-    `A z ${fmt(eA)}, b ${fmt(eB)}; area ${ms.area.toPrecision(8)} (C++ ${s.area.toPrecision(8)})`,
+    `A z ${fmt(eA)}, b ${fmt(eB)}; area ${ms.area.toPrecision(8)} (C++ ${s.area.toPrecision(8)})${block}`,
   );
 
-  let U = U0;
-  let P: Float32Array = new Float32Array(U0[0].length);
+  let state: FluidState = { U: U0, P: new Float32Array(U0[0].length), lam: 0 };
   let its = 0;
   const t0 = performance.now();
   for (let k = 1; k <= s.nsteps; k++) {
-    const out = await ms.step(U, P);
-    U = out.U;
-    P = out.P;
+    const out = await ms.step(state);
+    state = out.state;
+    const { U, P } = state;
     its += out.info.iterations;
     if (k === 1 || k === s.nsteps) {
       const tag = k === 1 ? '1' : 'N';
@@ -128,10 +136,11 @@ async function stepChecks(device: GPUDevice, check: Check, log: Log, dump: Retur
       const eX = relL2(ms.pack(X), ms.pack(fields(`X${tag}`, 3)));
       const eU = relL2(ms.pack(U), ms.pack(fields(`u${tag}`, 3)));
       const eP = relL2(ms.pack([P]), ms.pack([field(dump.arrays[`p${tag}`], 0)]));
+      const lam = volume ? `, multiplier ${state.lam.toPrecision(7)} (C++ ${s[`lam${tag}`].toPrecision(7)})` : '';
       check(
         `moving: ${label} after ${k} step${k > 1 ? 's' : ''} (dt ${s.dt}) matches the C++, rel L2`,
         out.info.converged && eX < 1e-5 && eU < 1e-4,
-        `X ${fmt(eX)}, u ${fmt(eU)}, p ${fmt(eP)}; the surface has moved by ${fmt(relL2(ms.pack(X), ms.pack(fields('X0', 3))))}; ` +
+        `X ${fmt(eX)}, u ${fmt(eU)}, p ${fmt(eP)}${lam}; the surface has moved by ${fmt(relL2(ms.pack(X), ms.pack(fields('X0', 3))))}; ` +
           `${out.info.iterations} GMRES its this step`,
       );
     }
@@ -161,7 +170,7 @@ export async function bendingChecks(device: GPUDevice, check: Check, log: Log): 
     relayoutCoeffs(new Float32Array(a.subarray(2 * c * nlm, 2 * (c + 1) * nlm)), work, prod);
   const fields = (name: string, n: number) => Array.from({ length: n }, (_, c) => field(dump.arrays[name], c));
 
-  const ms = await MovingStokes.create(device, lmax, { re: s.re, be: s.be, dt: s.dt, gmres: GMRES });
+  const ms = await MovingStokes.create(device, lmax, { re: s.re, be: s.be, volume: false, dt: s.dt, gmres: GMRES });
   ms.setSurface(fields('X0', 3));
   await ms.prepare(fields('u0', 3));
   const bf = await ms.fns.bendlin.readMany(['BF1', 'BF2', 'BF3']);
@@ -183,4 +192,11 @@ export async function bendingChecks(device: GPUDevice, check: Check, log: Log): 
   jvp.destroy();
   ms.destroy();
   await stepChecks(device, check, log, dump, `rotating perturbed sphere with bending (Be ${s.be})`);
+}
+
+/** Krause & Voigt's perturbed sphere: bending and the volume constraint, against
+ *  the C++ (test/fixtures/perturbed-cpu-L12). */
+export async function volumeChecks(device: GPUDevice, check: Check, log: Log): Promise<void> {
+  const dump = readDump(new URL('./fixtures/perturbed-cpu-L12/', import.meta.url));
+  await stepChecks(device, check, log, dump, `perturbed sphere, Be ${dump.scalars.be}, volume constrained`);
 }

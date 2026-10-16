@@ -45,18 +45,29 @@ function inverse3(a: number[]): number[] {
   return c.map((x) => x / det);
 }
 
-/** The blocks' inverses and the inverse toroidal symbol, named as models/stokes.m takes them. */
+/**
+ * The blocks' inverses (i11 ... i33), the inverses of their leading 2 x 2
+ * velocity blocks (w11 ... w22, the system without the pressure, for the
+ * volume constraint's block), and the inverse toroidal symbol, named as
+ * models/stokes.m takes them.
+ */
 export function sphereBlockTables(cfg: ShtConfig, p: SphereBlockParams): Record<string, Float32Array> {
   const inv: number[][] = [];
+  const vinv: number[][] = [];
   const itor: number[] = [];
   for (let l = 0; l <= cfg.lmax; l++) {
-    const b = sphereBlock(l, p);
-    inv.push(inverse3(b.k));
-    itor.push(1 / b.tor);
+    const { k, tor } = sphereBlock(l, p);
+    inv.push(inverse3(k));
+    const det = k[0] * k[4] - k[1] * k[3];
+    vinv.push([k[4] / det, -k[1] / det, -k[3] / det, k[0] / det]);
+    itor.push(1 / tor);
   }
   const out: Record<string, Float32Array> = { itor: byDegree(cfg, (l) => itor[l]) };
   for (let r = 0; r < 3; r++) {
     for (let c = 0; c < 3; c++) out[`i${r + 1}${c + 1}`] = byDegree(cfg, (l) => inv[l][3 * r + c]);
+  }
+  for (let r = 0; r < 2; r++) {
+    for (let c = 0; c < 2; c++) out[`w${r + 1}${c + 1}`] = byDegree(cfg, (l) => vinv[l][2 * r + c]);
   }
   return out;
 }
