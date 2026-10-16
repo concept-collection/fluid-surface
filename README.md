@@ -58,7 +58,7 @@ The fp32 error grows with lmax at the rate of the scalar analysis it is made of,
 
 [`lib/geometry.m`](lib/geometry.m) is the C++ solver's `FluidGeometryBuild`: from the coefficients of the position X, the dual tangent vectors, the unit normal, the mean and Gaussian curvatures, the area element and the four weights of the flux-form Laplace-Beltrami operator, 16 grid fields in all. Every derivative is taken in coefficient space and synthesized. The second theta derivative, which the C++ takes from its own recurrence, is written with the first-derivative shift alone, `sin^2(theta) u_thetatheta = (sin(theta) dtheta)^2 u - cos(theta) sin(theta) u_theta`, so no new external operation was needed. The position is zero-padded on the host to the product band (twice the working band) before the call, as in the C++.
 
-It compiles to 61 GPU operations: 15 syntheses in four batches, 15 coefficient shuffles and 31 element-wise kernels, one per line of MATLAB except for the line `id = 1 ./ realsqrt(ptt .* gpp - ptp.^2)`, which takes three. Measured on Dawn (Intel Iris Xe):
+It compiles to 59 GPU operations: 15 syntheses in four batches, 15 coefficient shuffles and 29 element-wise kernels, one per line of MATLAB. Measured on Dawn (Intel Iris Xe):
 
 | check | largest error |
 |---|---:|
@@ -197,12 +197,12 @@ This list records each place the MATLAB could not say what was meant, or the com
 - **A transposed shuffle** (step 1). `dthetat` is a new external operation, though it reuses the `dthetac` kernel.
 - **Real square roots** (step 2). `sqrt` of a value whose sign numbl cannot prove is complex, as in MATLAB, and complex arrays do not compile to WGSL. A determinant is nonnegative by Cauchy-Schwarz, which numbl cannot see. numbl now has MATLAB's `realsqrt` ([numbl#66](https://github.com/flatironinstitute/numbl/pull/66)), which says the result is real; before it, the code needed `sqrt(abs(detg))`.
 - **Fusion stopped at 32 substitutions** (step 2). numbl's inline pass made one substitution per sweep and gave up after 32 sweeps, which left `geometry.m` at 123 operations instead of 61. Fixed in numbl#66: the pass now runs to its fixed point.
-- **A call on an expression does not fuse** (step 2). `1 ./ realsqrt(ptt .* gpp - ptp.^2)` compiles to three kernels where `realsqrt(detg)` compiles to one: the expression inside the call is not folded into the kernel. Not yet looked into.
+- **A call on an expression did not fuse** (step 2). numbl kept every tensor-valued call off its fused path, to exclude shape constructors such as `nan(2,3)`, which also kept `1 ./ realsqrt(ptt .* gpp - ptp.^2)` at three kernels where `realsqrt(detg)` was one. Fixed in [numbl#67](https://github.com/flatironinstitute/numbl/pull/67): a tensor result with tensor arguments of its own shape now fuses.
 - **Bindings per kernel** (steps 2 and 3). A fused kernel binds every array its expression reads, plus the output and the parameters, against WebGPU's default limit of 8 storage buffers. The device asks for the adapter's limit (16 on this machine), and [`src/mgpu/split.ts`](src/mgpu/split.ts) splits a statement that still reads too many arrays, hoisting its widest subexpression that fits until the rest does. Each momentum line of the matvec, with the pressure gradient and the viscous divergence folded in, needs one such split.
 - **Vectors are three arrays.** A vector field is written as three scalar fields (`xt1`, `xt2`, `xt3`), and dot and cross products by hand; the rate-of-deformation tensor is nine (six distinct) scalar lines. Element-wise operations do not broadcast an `npts x 1` array against an `npts x 3` one.
 - **No structures.** Every field is its own argument: the static matvec takes 27, the moving one with bending 65, and `lib/geomtangent.m` 31 (the derivative fields of a position and of a displacement, five vectors each).
 - **No branches in a plan.** Bending is turned off by a zero scale (`bscale`), so a run without bending still runs the force's derivative in every matvec, 99 of its 255 GPU operations.
-- **`max(tensor, scalar)`** (step 3) is not supported by numbl's lowering yet. The one use was a no-op and was dropped.
+- **`max(tensor, scalar)`** (step 3) was not supported by numbl's lowering. numbl#67 adds the tensor and broadcast forms of two-argument `max` and `min`, and lets a builtin be elementwise for some argument forms only (`max(a, b)` is pointwise, `max(a)` a reduction); `models/static_stokes.m` uses it as the C++ does.
 - **Reductions are statements.** `dot` must be its own statement on named arrays; `dot(a, w) / dot(b, w)` in one line does not compile, since the planner sees the grid-sized arguments inside a scalar kernel.
 - **One band per function.** A function runs on one grid and one band. Keeping every spectral field on the product band, with masks for truncation and filters (see the static mode above), works around it at some cost.
 - **No shifts in the order m** (step 4a). Multiplying by x or y on the sphere couples m to m +- 1, which none of the coefficient shuffles does; the conversion to Q, S, T goes through the grid instead, at the cost of ten transforms.
@@ -231,7 +231,7 @@ python scripts/shtns_sphtor_fixture.py -lmax 16
 
 ## The numbl dependency
 
-numbl is a local `file:../../numbl` dependency, so a sibling checkout of numbl is required, as for turing-surface. It must be at or after `3f63b47d` ([numbl#66](https://github.com/flatironinstitute/numbl/pull/66)), for `realsqrt` and the fixed-point inline pass. We use its compiler internals, reached through the `numbl-src` alias in [`vite.config.ts`](vite.config.ts), and the surface we depend on is written down in [`src/mgpu/numbl.d.ts`](src/mgpu/numbl.d.ts).
+numbl is a local `file:../../numbl` dependency, so a sibling checkout of numbl is required, as for turing-surface. It must be at or after `592e9d77` ([numbl#67](https://github.com/flatironinstitute/numbl/pull/67)), for `realsqrt` and the fixed-point inline pass (#66), and for elementwise calls on tensors and two-argument `max` on tensors (#67). We use its compiler internals, reached through the `numbl-src` alias in [`vite.config.ts`](vite.config.ts), and the surface we depend on is written down in [`src/mgpu/numbl.d.ts`](src/mgpu/numbl.d.ts).
 
 ## Provenance and license
 
