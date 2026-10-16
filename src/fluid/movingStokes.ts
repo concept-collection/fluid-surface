@@ -54,7 +54,7 @@ export class MovingStokes {
   readonly lmax: number;
   readonly cfg: ShtConfig;
   readonly prm: MovingStokesParams;
-  readonly fns: Record<'geometry' | 'posderivs' | 'setup' | 'bendlin' | 'volblock' | 'rhs' | 'matvec' | 'advance' | 'diag' | 'position', GpuFunction>;
+  readonly fns: Record<'geometry' | 'posderivs' | 'setup' | 'bendlin' | 'volblock' | 'rhs' | 'matvec' | 'advance' | 'diag' | 'position' | 'velocity', GpuFunction>;
   /** The area at the last step's start. */
   area = 0;
   /** The volume constraint's 2 x 2 block at the last step's start, and whether it was used. */
@@ -118,6 +118,7 @@ export class MovingStokes {
       advance: await make(modelSource, 'advance', 3, { Y1: 'X1', Y2: 'X2', Y3: 'X3' }),
       diag: await make(modelSource, 'diag', 4),
       position: await make(modelSource, 'position', 3),
+      velocity: await make(modelSource, 'velocity', 4),
     };
     for (const [name, data] of Object.entries({ ...gridFrame(cfg), wq: chartWeights(cfg) })) host.upload(`grid.${name}`, data);
     for (const [name, data] of Object.entries(spectralMasks(cfg, lmax))) host.upload(`msk.${name}`, data);
@@ -281,6 +282,16 @@ export class MovingStokes {
    *  runs it on the current surface). */
   async geometryField(name: 'H' | 'K' | 'sqrtg'): Promise<Float32Array> {
     return this.fns.geometry.read(name);
+  }
+
+  /** The velocity U on the grid of the current surface, for drawing: its
+   *  tangential part, its outward normal component, and the outward normal. */
+  async velocityField(U: Float32Array[]): Promise<{ t: Float32Array[]; un: Float32Array; n: Float32Array[] }> {
+    U.forEach((u, c) => this.#host.upload(`U${c + 1}`, u));
+    this.fns.geometry.run();
+    this.fns.velocity.run();
+    const [t1, t2, t3, un, n1, n2, n3] = await this.fns.velocity.readMany(['t1', 't2', 't3', 'uout', 'geo.n1', 'geo.n2', 'geo.n3']);
+    return { t: [t1, t2, t3], un, n: [n1, n2, n3].map((c) => c.map((v) => -v)) };
   }
 
   /** Energies and integrals of a state on the current surface: kinetic energy,

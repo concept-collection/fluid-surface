@@ -174,6 +174,21 @@ function [R1, R2, R3, RP, RL] = precond(M1, M2, M3, MP, ML, NC1, NC2, NC3, grid,
   R3 = U3 .* msk.clean;
 end
 
+% The velocity on the grid, for drawing it: its tangential part t1, t2, t3,
+% and its normal component along the outward normal (geo.n points inward on
+% a sphere).
+function [t1, t2, t3, uout] = velocity(U1, U2, U3, geo)
+  [u1, u2, u3] = synth(U1, U2, U3);
+  u = [u1, u2, u3];
+  n = [geo.n1, geo.n2, geo.n3];
+  un = sum(u .* n, 2);
+  t = u - un .* n;
+  t1 = t(:, 1);
+  t2 = t(:, 2);
+  t3 = t(:, 3);
+  uout = -un;
+end
+
 % The surface's position on the grid, for drawing it.
 function [x1, x2, x3] = position(X1, X2, X3)
   [x1, x2, x3] = synth(X1, X2, X3);

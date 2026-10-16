@@ -57,6 +57,8 @@ export class SphereScene {
   #controls: OrbitControls;
   #geometry: THREE.BufferGeometry;
   #mesh: THREE.Mesh;
+  /** Line segments drawn over the surface (a vector field's arrows), or null. */
+  #lines: THREE.LineSegments | null = null;
   #animationId: number | null = null;
   #defaultCameraState: {
     position: THREE.Vector3;
@@ -178,6 +180,38 @@ export class SphereScene {
     attr.needsUpdate = true;
     this.#geometry.computeVertexNormals();
     this.#geometry.computeBoundingSphere();
+    this.#needsRender = true;
+  }
+
+  /**
+   * Line segments over the surface, as pairs of endpoints (x, y, z each), in
+   * one colour; null or empty removes them. For a vector field's arrows.
+   */
+  setLines(segments: Float32Array | null, color = '#111111'): void {
+    if (!segments || segments.length === 0) {
+      if (this.#lines) {
+        this.#scene.remove(this.#lines);
+        this.#lines.geometry.dispose();
+        (this.#lines.material as THREE.Material).dispose();
+        this.#lines = null;
+      }
+      this.#needsRender = true;
+      return;
+    }
+    if (!this.#lines) {
+      this.#lines = new THREE.LineSegments(new THREE.BufferGeometry(), new THREE.LineBasicMaterial({ color }));
+      this.#scene.add(this.#lines);
+    }
+    const g = this.#lines.geometry;
+    const attr = g.getAttribute('position') as THREE.BufferAttribute | undefined;
+    if (attr && attr.array.length === segments.length) {
+      (attr.array as Float32Array).set(segments);
+      attr.needsUpdate = true;
+    } else {
+      g.setAttribute('position', new THREE.BufferAttribute(segments.slice(), 3));
+    }
+    g.computeBoundingSphere();
+    (this.#lines.material as THREE.LineBasicMaterial).color.set(color);
     this.#needsRender = true;
   }
 
@@ -342,6 +376,7 @@ export class SphereScene {
     // itself stays up for the next scene.
     this.#geometry.dispose();
     (this.#mesh.material as THREE.Material).dispose();
+    this.setLines(null);
     this.#canvas.remove();
   }
 }

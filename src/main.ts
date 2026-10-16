@@ -17,15 +17,20 @@ import { buildTopology, fillColors, fillFieldValues, fillPositions, type SphereM
 import { colormaps } from './render/colormaps.ts';
 import { Colorbar, floorRange } from './render/colorbar.ts';
 import { LineChart } from './render/lineChart.ts';
+import { arrowSegments } from './render/arrows.ts';
 import modelSource from '../models/stokes.m?raw';
+import ref16 from './fluid/reference/fluid_run-perturbed_sphere-r0.4-L16-dt0.005.csv?raw';
+import ref32 from './fluid/reference/fluid_run-perturbed_sphere-r0.4-L32-dt0.005.csv?raw';
 
 const RE = 1;
 const BE = 2;
-type Field = 'H' | 'K' | 'sqrtg';
+type Field = 'H' | 'K' | 'sqrtg' | 'speed' | 'un';
 const FIELDS: { key: Field; label: string }[] = [
   { key: 'H', label: 'mean curvature H' },
   { key: 'K', label: 'Gaussian curvature K' },
   { key: 'sqrtg', label: 'area element' },
+  { key: 'speed', label: 'speed |u|' },
+  { key: 'un', label: 'normal velocity u . n (outward)' },
 ];
 const BANDS = [12, 16, 24, 32];
 const DTS = [0.0025, 0.005, 0.01, 0.02];
@@ -39,6 +44,59 @@ const r0Input = $<HTMLInputElement>('r0');
 const stats = $<HTMLDivElement>('stats');
 const err = $<HTMLDivElement>('err');
 const sphereBox = $<HTMLDivElement>('sphere');
+const arrowsBox = $<HTMLInputElement>('arrows');
+const refFile = $<HTMLInputElement>('ref-file');
+const refNote = $<HTMLSpanElement>('ref-note');
+const cmdLine = $<HTMLElement>('cmd');
+
+/** A fluid_run diagnostics.csv: time, kinetic and bending energies by step. */
+interface Diagnostics {
+  t: number[];
+  ekin: number[];
+  eh: number[];
+}
+
+function parseDiagnostics(csv: string): Diagnostics {
+  const [head, ...rows] = csv.trim().split(/\r?\n/);
+  const cols = head.split(',').map((c) => c.trim());
+  const col = (name: string) => {
+    const i = cols.indexOf(name);
+    if (i < 0) throw new Error(`the CSV has no '${name}' column (fluid_run's diagnostics.csv has t, e_kin and e_h)`);
+    return rows.map((r) => Number(r.split(',')[i]));
+  };
+  return { t: col('t'), ekin: col('e_kin'), eh: col('e_h') };
+}
+
+/** The C++ runs shipped with the page: fluid_run, BDF-1, dt 0.005, r0 0.4, tol 1e-8. */
+const BUILT_IN: Record<number, Diagnostics> = { 16: parseDiagnostics(ref16), 32: parseDiagnostics(ref32) };
+/** A diagnostics.csv the viewer loaded, which replaces the built-in reference. */
+let loaded: { name: string; d: Diagnostics } | null = null;
+
+/** Shows the reference that matches the current settings, if any, and the
+ *  fluid_run command that would make one. */
+function updateReference(): void {
+  const lmax = Number(bandSel.value);
+  const dt = Number(dtSel.value);
+  const r0 = Number(r0Input.value);
+  cmdLine.textContent =
+    `fluid_run -example perturbed_sphere -r0 ${r0} -Re ${RE} -Be ${BE} -order 1 -lmax ${lmax} -dt ${dt} ` +
+    `-T 0.5 -relabel_every 0 -frames 0 -save_dir out`;
+  let ref: Diagnostics | null = null;
+  let label = '';
+  if (loaded) {
+    ref = loaded.d;
+    label = `C++ (${loaded.name})`;
+    refNote.textContent = `Dashed: ${loaded.name}, loaded here. It is compared as is, so it should come from the command below.`;
+  } else if (BUILT_IN[lmax] && dt === 0.005 && Math.abs(r0 - 0.4) < 1e-9) {
+    ref = BUILT_IN[lmax];
+    label = 'C++ fluid_run';
+    refNote.textContent = `Dashed: the C++ solver's fluid_run with the same settings (band ${lmax}, dt 0.005, r0 0.4, BDF-1, GMRES tol 1e-8), shipped with the page.`;
+  } else {
+    refNote.textContent = 'No C++ reference for these settings (the page has band 16 and 32 at dt 0.005, r0 0.4). Run the command below and load its diagnostics.csv to compare.';
+  }
+  chartEh.setReference(ref && { ts: ref.t, ys: ref.eh }, label);
+  chartEkin.setReference(ref && { ts: ref.t, ys: ref.ekin }, label);
+}
 
 for (const f of FIELDS) fieldSel.add(new Option(f.label, f.key));
 for (const b of BANDS) bandSel.add(new Option(String(b), String(b)));
@@ -70,6 +128,11 @@ interface Run {
   last: { ekin: number; eh: number; area: number; volume: number; its: number; ms: number; converged: boolean };
   field: Float32Array | null;
   volume0: number;
+  /** sin(theta) of each latitude ring, for spacing the arrows. */
+  st: Float64Array;
+  /** The surface on the grid (x, y, z per point) and the velocity there. */
+  coords: Float32Array;
+  vel: { t: Float32Array[]; un: Float32Array; n: Float32Array[] } | null;
 }
 
 let run: Run | null = null;
@@ -82,7 +145,8 @@ async function build(lmax: number, dt: number): Promise<void> {
   });
   const { nlat, nphi } = ms.cfg;
   const phi = Float64Array.from({ length: nphi }, (_, j) => (2 * Math.PI * j) / nphi);
-  const topo = buildTopology(gaussNodesWeights(nlat).x, phi);
+  const ct = gaussNodesWeights(nlat).x;
+  const topo = buildTopology(ct, phi);
   run?.scene.dispose();
   run?.ms.destroy();
   sphereBox.replaceChildren();
@@ -98,6 +162,9 @@ async function build(lmax: number, dt: number): Promise<void> {
     last: { ekin: 0, eh: 0, area: 0, volume: 0, its: 0, ms: 0, converged: true },
     field: null,
     volume0: 0,
+    st: Float64Array.from(ct, (c) => Math.sqrt(1 - c * c)),
+    coords: new Float32Array(3 * nlat * nphi),
+    vel: null,
   };
   resize();
   const ops = ms.fns.matvec.describe();
@@ -117,6 +184,7 @@ async function reset(): Promise<void> {
   r.step = 0;
   chartEh.clear();
   chartEkin.clear();
+  updateReference();
   await observe(0, 0, true);
   r.volume0 = r.last.volume;
   draw();
@@ -132,10 +200,33 @@ async function observe(its: number, ms: number, converged: boolean): Promise<voi
   chartEkin.push(t, r.last.ekin);
   const grid = await r.ms.surfaceGrid();
   const n = r.ms.cfg.nlat * r.ms.cfg.nphi;
-  const coords = new Float32Array(3 * n);
-  for (let k = 0; k < n; k++) for (let c = 0; c < 3; c++) coords[3 * k + c] = grid[c][k];
-  fillPositions(r.positions, coords, r.topo, 1);
-  r.field = await r.ms.geometryField(fieldSel.value as Field);
+  for (let k = 0; k < n; k++) for (let c = 0; c < 3; c++) r.coords[3 * k + c] = grid[c][k];
+  fillPositions(r.positions, r.coords, r.topo, 1);
+  r.vel = await r.ms.velocityField(r.state.U);
+  r.field = await fieldValues(fieldSel.value as Field);
+}
+
+/** The values the surface is coloured by. */
+async function fieldValues(f: Field): Promise<Float32Array> {
+  const r = run!;
+  if (f === 'H' || f === 'K' || f === 'sqrtg') return r.ms.geometryField(f);
+  const v = r.vel!;
+  if (f === 'un') return v.un;
+  return v.un.map((un, k) => Math.hypot(v.t[0][k], v.t[1][k], v.t[2][k], un));
+}
+
+/** Arrows of the tangential velocity, the longest 0.3 times the surface's radius. */
+function drawArrows(): string {
+  const r = run!;
+  if (!arrowsBox.checked || !r.vel) {
+    r.scene.setLines(null);
+    return '';
+  }
+  const size = Math.sqrt(r.last.area / (4 * Math.PI));
+  const { nlat, nphi } = r.ms.cfg;
+  const { segments, vmax } = arrowSegments({ nlat, nphi, st: r.st }, r.coords, r.vel.t, r.vel.n, 0.3 * size);
+  r.scene.setLines(segments);
+  return vmax > 0 ? ` &middot; arrows: tangential velocity, longest ${vmax.toPrecision(3)}` : '';
 }
 
 function draw(): void {
@@ -153,6 +244,7 @@ function draw(): void {
   fillColors(r.colors, r.values, shown.lo, shown.hi, cmap);
   r.scene.updateColors(r.colors);
   colorbar.update(cmap, shown.lo, shown.hi);
+  const arrows = drawArrows();
   const L = r.last;
   const t = r.step * r.dt;
   const { nlat, nphi, lmax } = r.ms.cfg;
@@ -160,7 +252,7 @@ function draw(): void {
     `t <b>${t.toFixed(3)}</b> (step ${r.step}) &middot; E_h <b>${L.eh.toPrecision(6)}</b> &middot; ` +
     `E_kin <b>${L.ekin.toPrecision(4)}</b> &middot; area ${L.area.toPrecision(6)} &middot; ` +
     `volume ${L.volume.toPrecision(6)} (drift ${((L.volume - r.volume0) / r.volume0).toExponential(1)}) &middot; ` +
-    `multiplier ${r.state.lam.toPrecision(4)}<br>` +
+    `multiplier ${r.state.lam.toPrecision(4)}${arrows}<br>` +
     `band ${r.lmax}, product band ${lmax} on ${nlat} x ${nphi}, dt ${r.dt} &middot; ` +
     (r.step ? `${L.its} GMRES iterations, ${L.ms.toFixed(0)} ms per step` : 'at rest') +
     (L.converged ? '' : ' &middot; <span class="warn">GMRES did not reach its tolerance</span>');
@@ -284,11 +376,28 @@ async function start(): Promise<void> {
   fieldSel.addEventListener('change', () =>
     void paused(async () => {
       if (!run) return;
-      run.field = await run.ms.geometryField(fieldSel.value as Field);
+      run.field = await fieldValues(fieldSel.value as Field);
       draw();
     }),
   );
   $<HTMLButtonElement>('view').addEventListener('click', () => run?.scene.resetCamera());
+  arrowsBox.addEventListener('change', draw);
+  refFile.addEventListener('change', async () => {
+    const file = refFile.files?.[0];
+    if (!file) return;
+    try {
+      loaded = { name: file.name, d: parseDiagnostics(await file.text()) };
+    } catch (e) {
+      loaded = null;
+      showError(e);
+    }
+    updateReference();
+  });
+  $<HTMLButtonElement>('ref-clear').addEventListener('click', () => {
+    loaded = null;
+    refFile.value = '';
+    updateReference();
+  });
   new ResizeObserver(resize).observe(sphereBox);
 }
 

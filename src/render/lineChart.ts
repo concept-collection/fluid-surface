@@ -1,9 +1,10 @@
 /**
- * A small single-series line chart in SVG, for a quantity over simulated time:
- * a 2px line, recessive axes with the range's ends labelled, the latest value
- * beside the title, and a crosshair with a readout on hover. One series per
- * chart, so quantities of different scale go in separate charts rather than on
- * two y-axes.
+ * A small line chart in SVG, for a quantity over simulated time: a 2px line,
+ * recessive axes with the range's ends labelled, the latest value beside the
+ * title, and a crosshair with a readout on hover. One quantity per chart, so
+ * quantities of different scale go in separate charts rather than on two
+ * y-axes. A reference series of the same quantity (another code's run) can be
+ * drawn under it, dashed and in the secondary ink, with a legend naming both.
  */
 
 const NS = 'http://www.w3.org/2000/svg';
@@ -33,6 +34,9 @@ const fmt = (v: number): string => {
 export class LineChart {
   #ts: number[] = [];
   #ys: number[] = [];
+  #ref: { ts: number[]; ys: number[] } | null = null;
+  #refPath: SVGPathElement;
+  #legend: HTMLElement;
   #svg: SVGSVGElement;
   #path: SVGPathElement;
   #value: HTMLElement;
@@ -54,6 +58,9 @@ export class LineChart {
     this.#value = document.createElement('span');
     this.#value.className = 'chart-value';
     head.append(name, this.#value);
+    this.#legend = document.createElement('div');
+    this.#legend.className = 'chart-legend';
+    this.#legend.hidden = true;
 
     const box = document.createElement('div');
     box.className = 'chart-box';
@@ -73,16 +80,17 @@ export class LineChart {
       el('text', { x: x1, y: H - 6, 'text-anchor': 'end', class: 'chart-label' }) as SVGTextElement,
     ];
     this.#path = el('path', { class: 'chart-line', fill: 'none' }) as SVGPathElement;
+    this.#refPath = el('path', { class: 'chart-ref', fill: 'none' }) as SVGPathElement;
     this.#cross = el('line', { y1: PAD.top, y2: y0, class: 'chart-cross', visibility: 'hidden' }) as SVGLineElement;
     this.#dot = el('circle', { r: 4, class: 'chart-dot', visibility: 'hidden' }) as SVGCircleElement;
     // The hit target is the whole plot area, not the line.
     const hit = el('rect', { x: x0, y: PAD.top, width: x1 - x0, height: y0 - PAD.top, fill: 'transparent' });
-    this.#svg.append(...this.#yLabels, ...this.#xLabels, this.#path, this.#cross, this.#dot, hit);
+    this.#svg.append(...this.#yLabels, ...this.#xLabels, this.#refPath, this.#path, this.#cross, this.#dot, hit);
     this.#tip = document.createElement('div');
     this.#tip.className = 'chart-tip';
     this.#tip.hidden = true;
     box.append(this.#svg, this.#tip);
-    container.append(head, box);
+    container.append(head, this.#legend, box);
 
     hit.addEventListener('pointermove', (e) => this.#hover(e as PointerEvent));
     hit.addEventListener('pointerleave', () => this.#hideHover());
@@ -94,6 +102,16 @@ export class LineChart {
     this.#draw();
   }
 
+  /** Draws `ref` under the series, labelled `label` (null removes it). */
+  setReference(ref: { ts: number[]; ys: number[] } | null, label = '', own = 'this page'): void {
+    this.#ref = ref && ref.ts.length ? ref : null;
+    this.#legend.hidden = !this.#ref;
+    this.#legend.innerHTML = this.#ref
+      ? `<span class="key-line"></span>${own} <span class="key-ref"></span>${label}`
+      : '';
+    this.#draw();
+  }
+
   push(t: number, y: number): void {
     this.#ts.push(t);
     this.#ys.push(y);
@@ -101,10 +119,12 @@ export class LineChart {
   }
 
   #range(): Range {
-    const t0 = this.#ts[0] ?? 0;
-    const t1 = Math.max(this.#ts[this.#ts.length - 1] ?? 1, t0 + 1e-9);
-    let lo = Math.min(...this.#ys);
-    let hi = Math.max(...this.#ys);
+    const ts = this.#ref ? [...this.#ts, ...this.#ref.ts] : this.#ts;
+    const ys = this.#ref ? [...this.#ys, ...this.#ref.ys] : this.#ys;
+    const t0 = Math.min(...ts);
+    const t1 = Math.max(Math.max(...ts), t0 + 1e-9);
+    let lo = Math.min(...ys);
+    let hi = Math.max(...ys);
     if (!(hi > lo)) {
       const pad = Math.abs(hi) * 1e-3 || 1e-6;
       lo -= pad;
@@ -114,20 +134,33 @@ export class LineChart {
   }
 
   #xy(i: number, r: Range): [number, number] {
-    const x = PAD.left + ((this.#ts[i] - r.t0) / (r.t1 - r.t0)) * (W - PAD.left - PAD.right);
-    const y = H - PAD.bottom - ((this.#ys[i] - r.lo) / (r.hi - r.lo)) * (H - PAD.bottom - PAD.top);
+    return this.#at(this.#ts[i], this.#ys[i], r);
+  }
+
+  #at(t: number, v: number, r: Range): [number, number] {
+    const x = PAD.left + ((t - r.t0) / (r.t1 - r.t0)) * (W - PAD.left - PAD.right);
+    const y = H - PAD.bottom - ((v - r.lo) / (r.hi - r.lo)) * (H - PAD.bottom - PAD.top);
     return [x, y];
   }
 
   #draw(): void {
     const n = this.#ts.length;
     this.#value.textContent = n ? `${fmt(this.#ys[n - 1])}${this.#unit}` : '';
-    if (!n) {
+    if (!n && !this.#ref) {
       this.#path.setAttribute('d', '');
+      this.#refPath.setAttribute('d', '');
       for (const l of [...this.#yLabels, ...this.#xLabels]) l.textContent = '';
       return;
     }
     const r = this.#range();
+    let dr = '';
+    if (this.#ref) {
+      this.#ref.ts.forEach((t, i) => {
+        const [x, y] = this.#at(t, this.#ref!.ys[i], r);
+        dr += `${i ? 'L' : 'M'}${x.toFixed(1)},${y.toFixed(1)}`;
+      });
+    }
+    this.#refPath.setAttribute('d', dr);
     let d = '';
     for (let i = 0; i < n; i++) {
       const [x, y] = this.#xy(i, r);
@@ -156,7 +189,13 @@ export class LineChart {
     this.#cross.setAttribute('visibility', 'visible');
     this.#dot.setAttribute('visibility', 'visible');
     this.#tip.hidden = false;
-    this.#tip.textContent = `t = ${fmt(this.#ts[i])}: ${fmt(this.#ys[i])}${this.#unit}`;
+    let refText = '';
+    if (this.#ref) {
+      // The reference at the same time, if it has one there.
+      const j = this.#ref.ts.findIndex((t) => Math.abs(t - this.#ts[i]) < 1e-9);
+      if (j >= 0) refText = ` (reference ${fmt(this.#ref.ys[j])})`;
+    }
+    this.#tip.textContent = `t = ${fmt(this.#ts[i])}: ${fmt(this.#ys[i])}${this.#unit}${refText}`;
     const left = (x / W) * box.width;
     this.#tip.style.left = `${Math.min(Math.max(left, 60), box.width - 60)}px`;
   }
