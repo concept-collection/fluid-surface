@@ -9,6 +9,7 @@
  */
 import { requestShtDevice } from '../src/sht/sht.ts';
 import { installWebGpu, errMsg, NO_ADAPTER_HINT } from './nodeWebGpu.ts';
+import { compileChecks } from '../test/compileChecks.ts';
 import { sphtorChecks } from '../test/sphtorChecks.ts';
 import { geometryChecks } from '../test/geometryChecks.ts';
 import { stokesChecks } from '../test/stokesChecks.ts';
@@ -41,6 +42,7 @@ try {
 console.log(`fluid-surface tests — ${runtime}\n`);
 
 const suites: [string, (d: GPUDevice, c: typeof check, l: typeof log) => Promise<void>][] = [
+  ['compile', compileChecks],
   ['sphtor', sphtorChecks],
   ['geometry', geometryChecks],
   ['stokes', stokesChecks],

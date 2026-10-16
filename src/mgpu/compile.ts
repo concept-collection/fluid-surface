@@ -20,6 +20,7 @@
  */
 import { parseMFile } from 'numbl-src/numbl-core/parser/index.ts';
 import { Workspace, Lowerer, tensorDouble, scalarDouble } from 'numbl-src/numbl-core/jit/index.ts';
+import { structType } from 'numbl-src/numbl-core/jit/lowering/types.ts';
 import { specializeUserFunction } from 'numbl-src/numbl-core/jit/lowering/specialize.ts';
 import { inlinePass } from 'numbl-src/numbl-core/jit/codegen/inlinePass.ts';
 import type { For, IRExpr, IRFunc, IRStmt } from 'numbl-src/numbl-core/jit/lowering/ir.ts';
@@ -38,10 +39,15 @@ export type Binding =
   | { kind: 'param' }
   /** A fixed scalar, exact so array constructors reading it keep static
    *  shapes. */
-  | { kind: 'const'; value: number };
+  | { kind: 'const'; value: number }
+  /** A struct of arrays, read by field (`geo.n1`). Each field is its own
+   *  buffer, named `<argument>.<field>`; only tensor fields are supported. */
+  | { kind: 'struct'; fields: Record<string, Binding> };
 
 const typeOf = (b: Binding): Type => {
   switch (b.kind) {
+    case 'struct':
+      return structType(Object.entries(b.fields).map(([name, f]) => ({ name, ty: typeOf(f) })));
     case 'tensor':
       return tensorDouble(b.shape);
     case 'param':

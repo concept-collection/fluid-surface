@@ -297,6 +297,9 @@ function cloneExpr(e: IRExpr, c: CloneCtx): IRExpr {
       return { ...e, operand: cloneExpr(e.operand, c) };
     case 'Call':
       return { ...e, args: e.args.map((a) => cloneExpr(a, c)) };
+    case 'MemberLoad':
+      // A field read of a struct parameter reads the caller's struct.
+      return { ...e, base: cloneExpr(e.base, c) };
     default:
       // Literals and anything else without variable reads: share as-is (the
       // planner treats expressions as read-only).

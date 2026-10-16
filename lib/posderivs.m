@@ -8,9 +8,9 @@
 %
 % Every derivative is a coefficient shuffle and a synthesis, so the
 % coefficients must stop two degrees below the band. The C++ solver's inputs
-% to KFGeometry (FluidGeometryBuild); ct is cos(theta) on the grid.
+% to KFGeometry (FluidGeometryBuild); grid.ct is cos(theta).
 
-function [sxt1, sxt2, sxt3, xp1, xp2, xp3, sxtt1, sxtt2, sxtt3, sxtp1, sxtp2, sxtp3, xpp1, xpp2, xpp3] = posderivs(X1, X2, X3, ct)
+function [sxt1, sxt2, sxt3, xp1, xp2, xp3, sxtt1, sxtt2, sxtt3, sxtp1, sxtp2, sxtp3, xpp1, xpp2, xpp3] = posderivs(X1, X2, X3, grid)
   T1 = dthetac(X1);
   T2 = dthetac(X2);
   T3 = dthetac(X3);
@@ -19,7 +19,7 @@ function [sxt1, sxt2, sxt3, xp1, xp2, xp3, sxtt1, sxtt2, sxtt3, sxtp1, sxtp2, sx
   P3 = dphic(X3);
   [sxt1, sxt2, sxt3, xp1, xp2, xp3] = synth(T1, T2, T3, P1, P2, P3);
   [tt1, tt2, tt3, sxtp1, sxtp2, sxtp3, xpp1, xpp2, xpp3] = synth(dthetac(T1), dthetac(T2), dthetac(T3), dphic(T1), dphic(T2), dphic(T3), dphic(P1), dphic(P2), dphic(P3));
-  sxtt1 = tt1 - ct .* sxt1;
-  sxtt2 = tt2 - ct .* sxt2;
-  sxtt3 = tt3 - ct .* sxt3;
+  sxtt1 = tt1 - grid.ct .* sxt1;
+  sxtt2 = tt2 - grid.ct .* sxt2;
+  sxtt3 = tt3 - grid.ct .* sxt3;
 end

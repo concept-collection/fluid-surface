@@ -1,10 +1,17 @@
 % The derivative of the surface geometry when the position x moves by a
 % displacement y: of the mean and Gaussian curvatures, the unit normal, and
 % the flux-form Laplacian weights (lib/geometry.m). The inputs are the
-% derivative fields of x and of y (lib/posderivs.m, the d-prefixed ones for
-% y); st is sin(theta) on the grid. The C++ solver's KFGeometryTangent.
+% derivative fields of x (the struct der, lib/posderivs.m) and of y (the
+% d-prefixed arrays); grid.st is sin(theta). The C++ solver's
+% KFGeometryTangent.
 
-function [dH, dK, dn1, dn2, dn3, ddp1, dp2, ddq2, djinv] = geomtangent(sxt1, sxt2, sxt3, xp1, xp2, xp3, sxtt1, sxtt2, sxtt3, sxtp1, sxtp2, sxtp3, xpp1, xpp2, xpp3, dsxt1, dsxt2, dsxt3, dxp1, dxp2, dxp3, dsxtt1, dsxtt2, dsxtt3, dsxtp1, dsxtp2, dsxtp3, dxpp1, dxpp2, dxpp3, st)
+function [dH, dK, dn1, dn2, dn3, ddp1, dp2, ddq2, djinv] = geomtangent(der, dsxt1, dsxt2, dsxt3, dxp1, dxp2, dxp3, dsxtt1, dsxtt2, dsxtt3, dsxtp1, dsxtp2, dsxtp3, dxpp1, dxpp2, dxpp3, grid)
+  sxt1 = der.sxt1; sxt2 = der.sxt2; sxt3 = der.sxt3;
+  xp1 = der.xp1; xp2 = der.xp2; xp3 = der.xp3;
+  sxtt1 = der.sxtt1; sxtt2 = der.sxtt2; sxtt3 = der.sxtt3;
+  sxtp1 = der.sxtp1; sxtp2 = der.sxtp2; sxtp3 = der.sxtp3;
+  xpp1 = der.xpp1; xpp2 = der.xpp2; xpp3 = der.xpp3;
+  st = grid.st;
   s2 = st .* st;
   xt1 = sxt1 ./ st;
   xt2 = sxt2 ./ st;

@@ -118,13 +118,13 @@ export class SurfaceGeometry {
       deriv,
       source: geometrySource,
       name: 'geometry',
-      bindings: { X1: spectral, X2: spectral, X3: spectral, ct: grid, st: grid },
+      bindings: { X1: spectral, X2: spectral, X3: spectral, grid: { kind: 'struct', fields: { ct: grid, st: grid } } },
       libs: operatorLibs,
       nargout: GEOMETRY_OUTPUTS.length,
     });
     const { ct, st } = gridTrig(cfg);
-    fn.upload('ct', ct);
-    fn.upload('st', st);
+    fn.upload('grid.ct', ct);
+    fn.upload('grid.st', st);
     return new SurfaceGeometry(cfg, sht, deriv, fn);
   }
 

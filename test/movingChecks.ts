@@ -31,9 +31,10 @@ import { relL2, fmt, type Check, type Log } from './check.ts';
 const GMRES = { tol: 1e-6, restart: 200, maxCycles: 4 };
 
 const QST_CHECK = `
-function [Q, S, T, V1, V2, V3] = qstcheck(U1, U2, U3, ct, st, cp, sp, ilam, keep)
-  [Q, S, T] = cart2qst(U1, U2, U3, ct, st, cp, sp, ilam);
-  [V1, V2, V3] = qst2cart(Q .* keep, S .* keep, T .* keep, ct, st, cp, sp);
+function [Q, S, T, V1, V2, V3] = qstcheck(U1, U2, U3, grid, msk)
+  [Q, S, T] = cart2qst(U1, U2, U3, grid, msk);
+  keep = msk.keep;
+  [V1, V2, V3] = qst2cart(Q .* keep, S .* keep, T .* keep, grid);
 end
 `;
 
@@ -59,11 +60,15 @@ export async function movingChecks(device: GPUDevice, check: Check, log: Log): P
     const grid: Binding = { kind: 'tensor', shape: [cfg.nlat * cfg.nphi, 1] };
     const fn = await GpuFunction.create({
       device, sht, deriv, source: QST_CHECK, name: 'qstcheck', nargout: 6, libs: operatorLibs,
-      bindings: { U1: spec, U2: spec, U3: spec, ilam: spec, keep: spec, ct: grid, st: grid, cp: grid, sp: grid },
+      bindings: {
+        U1: spec, U2: spec, U3: spec,
+        grid: { kind: 'struct', fields: { ct: grid, st: grid, cp: grid, sp: grid } },
+        msk: { kind: 'struct', fields: { ilam: spec, keep: spec } },
+      },
     });
-    for (const [k, v] of Object.entries(gridFrame(cfg))) fn.upload(k, v);
-    fn.upload('ilam', masks.ilam);
-    fn.upload('keep', masks.keep);
+    for (const [k, v] of Object.entries(gridFrame(cfg))) fn.upload(`grid.${k}`, v);
+    fn.upload('msk.ilam', masks.ilam);
+    fn.upload('msk.keep', masks.keep);
     fields('cart', 3).forEach((f, c) => fn.upload(`U${c + 1}`, f));
     fn.run();
     const out = await fn.readMany(['Q', 'S', 'T', 'V1', 'V2', 'V3']);
@@ -150,8 +155,8 @@ async function stepChecks(device: GPUDevice, check: Check, log: Log, dump: Retur
   ms.destroy();
 }
 const JVP_CHECK = `
-function [J1, J2, J3] = jvpcheck(Y1, Y2, Y3, sxt1, sxt2, sxt3, xp1, xp2, xp3, sxtt1, sxtt2, sxtt3, sxtp1, sxtp2, sxtp3, xpp1, xpp2, xpp3, ct, st, H, K, n1, n2, n3, dp1, p2, dq2, jinv, ba, bb, braw, bvc, lam, filtf, real0, keep, bscale)
-  [J1, J2, J3] = bendjvp(Y1, Y2, Y3, sxt1, sxt2, sxt3, xp1, xp2, xp3, sxtt1, sxtt2, sxtt3, sxtp1, sxtp2, sxtp3, xpp1, xpp2, xpp3, ct, st, H, K, n1, n2, n3, dp1, p2, dq2, jinv, ba, bb, braw, bvc, lam, filtf, real0, keep, bscale);
+function [J1, J2, J3] = jvpcheck(Y1, Y2, Y3, der, geo, bl, grid, msk, bscale)
+  [J1, J2, J3] = bendjvp(Y1, Y2, Y3, der, geo, bl, grid, msk, bscale);
 end
 `;
 

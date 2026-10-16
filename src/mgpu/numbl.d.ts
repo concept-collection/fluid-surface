@@ -42,12 +42,20 @@ declare module 'numbl-src/numbl-core/jit/lowering/types.ts' {
     exact?: NumericExact;
   }
 
-  /** Everything the WGSL backend rejects. */
-  export interface NonNumericType {
-    kind: 'Void' | 'Unknown' | 'String' | 'Handle' | 'Struct' | 'Class' | 'Cell';
+  /** A struct value; the planner binds each tensor field to a buffer. */
+  export interface StructType {
+    kind: 'Struct';
+    fields: ReadonlyArray<{ name: string; ty: Type }>;
   }
 
-  export type Type = NumericType | NonNumericType;
+  /** Everything the WGSL backend rejects. */
+  export interface NonNumericType {
+    kind: 'Void' | 'Unknown' | 'String' | 'Handle' | 'Class' | 'Cell';
+  }
+
+  export type Type = NumericType | StructType | NonNumericType;
+
+  export function structType(fields: ReadonlyArray<{ name: string; ty: Type }>): StructType;
 
   export function isMultiElement(t: NumericType): boolean;
   export function tensorDouble(shape: number[], exact?: Float64Array): NumericType;
@@ -99,18 +107,26 @@ declare module 'numbl-src/numbl-core/jit/lowering/ir.ts' {
     ty: Type;
     span: Span;
   }
+  /** A field read, `s.f`. numbl's ANF gives each its own Assign. */
+  export interface MemberLoad {
+    kind: 'MemberLoad';
+    base: IRExpr;
+    field: string;
+    ty: Type;
+    span: Span;
+  }
   /** Any other IR expression kind — rejected by the WGSL emitter. */
   export interface OtherExpr {
     kind:
       | 'ImagLit' | 'StringLit' | 'TensorBuild' | 'TensorConcat' | 'CellLit'
       | 'CellEmpty' | 'CellIndexLoad' | 'HandleLit' | 'HandleCaptureLoad'
-      | 'StructLit' | 'MemberLoad' | 'IndexLoad' | 'IndexSlice' | 'EndRef'
+      | 'StructLit' | 'IndexLoad' | 'IndexSlice' | 'EndRef'
       | 'MakeRange';
     ty: Type;
     span: Span;
   }
 
-  export type IRExpr = NumLit | Var | Binary | Unary | Call | OtherExpr;
+  export type IRExpr = NumLit | Var | Binary | Unary | Call | MemberLoad | OtherExpr;
 
   export interface Assign {
     kind: 'Assign';

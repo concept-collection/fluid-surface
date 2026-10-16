@@ -15,7 +15,8 @@ import { HostBuffers } from '../mgpu/plan.ts';
 import { GpuFunction } from '../mgpu/gpuFunction.ts';
 import type { Binding } from '../mgpu/compile.ts';
 import { operatorLibs } from '../mgpu/libs.ts';
-import { gridTrig, productConfig } from '../geom/geometry.ts';
+import { gridFrame, productConfig } from '../geom/geometry.ts';
+import { GEO_FIELDS, GRID_FIELDS, MSK_FIELDS, into, structOf } from './structs.ts';
 import { chartWeights, spectralMasks, workingIndices } from './spectra.ts';
 import { gmres, type GmresOptions } from './gmres.ts';
 import geometrySource from '../../lib/geometry.m?raw';
@@ -37,7 +38,6 @@ export interface StepInfo {
 }
 
 /** The geometry fields the model reads, each fed into a buffer of its name. */
-const GEOMETRY_FED = ['vt1', 'vt2', 'vt3', 'vp1', 'vp2', 'vp3', 'n1', 'n2', 'n3', 'H', 'sqrtg', 'jinv'];
 
 export class StaticStokes {
   readonly lmax: number;
@@ -80,14 +80,17 @@ export class StaticStokes {
     const spec: Binding = { kind: 'tensor', shape: [2, sht.nlm] };
     const grid: Binding = { kind: 'tensor', shape: [npts, 1] };
     const param: Binding = { kind: 'param' };
-    const bindings: Record<string, Binding> = { mass: param, disp: param, re: param, be: param, visc: param };
-    for (const n of ['X1', 'X2', 'X3', 'U1', 'U2', 'U3', 'Z1', 'Z2', 'Z3', 'Z4', 'lam', 'keep', 'clean', 'filtf', 'e0', 'pscale', 'vdiv'])
-      bindings[n] = spec;
-    for (const n of ['ct', 'st', 'wq', 'v1', 'v2', 'v3', ...GEOMETRY_FED]) bindings[n] = grid;
+    const bindings: Record<string, Binding> = {
+      mass: param, disp: param, re: param, be: param, visc: param,
+      geo: structOf(GEO_FIELDS, grid),
+      grid: structOf(GRID_FIELDS, grid),
+      msk: structOf(MSK_FIELDS, spec),
+    };
+    for (const n of ['X1', 'X2', 'X3', 'U1', 'U2', 'U3', 'Z1', 'Z2', 'Z3', 'Z4', 'pscale', 'vdiv']) bindings[n] = spec;
+    for (const n of ['v1', 'v2', 'v3']) bindings[n] = grid;
     const common = { device, sht, deriv, bindings, host, libs: operatorLibs };
     const geometry = await GpuFunction.create({
-      ...common, source: geometrySource, name: 'geometry', nargout: 16,
-      feedback: Object.fromEntries(GEOMETRY_FED.map((n) => [n, n])),
+      ...common, source: geometrySource, name: 'geometry', nargout: 16, feedback: into('geo', GEO_FIELDS),
     });
     const setup = await GpuFunction.create({
       ...common, source: modelSource, name: 'setup', nargout: 5,
@@ -96,13 +99,8 @@ export class StaticStokes {
     const rhs = await GpuFunction.create({ ...common, source: modelSource, name: 'rhs', nargout: 4 });
     const matvec = await GpuFunction.create({ ...common, source: modelSource, name: 'matvec', nargout: 4 });
 
-    const { ct, st } = gridTrig(cfg);
-    const masks = spectralMasks(cfg, lmax);
-    const up = (name: string, data: Float32Array) => host.get(name) && host.upload(name, data);
-    up('ct', ct);
-    up('st', st);
-    up('wq', chartWeights(cfg));
-    for (const [name, data] of Object.entries(masks)) up(name, data);
+    for (const [name, data] of Object.entries({ ...gridFrame(cfg), wq: chartWeights(cfg) })) host.upload(`grid.${name}`, data);
+    for (const [name, data] of Object.entries(spectralMasks(cfg, lmax))) host.upload(`msk.${name}`, data);
     return new StaticStokes({ lmax, cfg, prm, sht, deriv, host, geometry, setup, rhs, matvec });
   }
 

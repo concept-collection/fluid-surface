@@ -506,12 +506,28 @@ export class ModelPlan {
     // storage buffer, in signature order.
     const paramNames: string[] = [];
     const paramSlots = new Map<string, number>();
+    /** Struct arguments: cName -> field -> the field's buffer. */
+    const structFields = new Map<string, Map<string, Slot>>();
     for (const p of fn.params) {
       if (p.binding.kind === 'tensor') {
         const count = p.binding.shape.reduce((x, y) => x * y, 1);
         const slot = host.ensure(p.name, count);
         slots.set(p.cName, slot);
         byName.set(p.name, slot);
+      } else if (p.binding.kind === 'struct') {
+        // Each field is a shared buffer named `<argument>.<field>`, so the
+        // host (or another function's feedback) fills it by that name.
+        const fields = new Map<string, Slot>();
+        for (const [field, b] of Object.entries(p.binding.fields)) {
+          if (b.kind !== 'tensor') {
+            throw new UnsupportedOnGpu(`'${p.name}.${field}': only array fields are supported in a struct argument`);
+          }
+          const name = `${p.name}.${field}`;
+          const slot = host.ensure(name, b.shape.reduce((x, y) => x * y, 1));
+          fields.set(field, slot);
+          byName.set(name, slot);
+        }
+        structFields.set(p.cName, fields);
       } else if (p.binding.kind === 'param') {
         paramSlots.set(p.cName, paramNames.length);
         paramNames.push(p.name);
@@ -704,6 +720,20 @@ export class ModelPlan {
             `(found '${stmt.kind}')`,
           stmt.span,
         );
+      }
+      if (stmt.expr.kind === 'MemberLoad') {
+        // `t = s.f` reads a struct argument's field: alias its buffer, no
+        // kernel. numbl's ANF gives every field read its own statement.
+        const base = stmt.expr.base;
+        const field = base.kind === 'Var' ? structFields.get(base.cName)?.get(stmt.expr.field) : undefined;
+        if (!field) {
+          throw new UnsupportedOnGpu(
+            `'${stmt.name}' reads a field of something other than a struct argument`,
+            stmt.span,
+          );
+        }
+        slots.set(stmt.cName, field);
+        return;
       }
       if (!isNumeric(stmt.ty)) {
         throw new UnsupportedOnGpu(

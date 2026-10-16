@@ -22,6 +22,7 @@ import { operatorLibs } from '../mgpu/libs.ts';
 import { gridFrame, productConfig } from '../geom/geometry.ts';
 import { chartWeights, spectralMasks, workingIndices } from './spectra.ts';
 import { sphereBlockTables } from './sphereBlocks.ts';
+import { BL_FIELDS, DER_FIELDS, GEO_FIELDS, GRID_FIELDS, MSK_FIELDS, TAB_FIELDS, into, structOf } from './structs.ts';
 import { gmres, type GmresOptions } from './gmres.ts';
 import type { StepInfo } from './staticStokes.ts';
 import geometrySource from '../../lib/geometry.m?raw';
@@ -38,11 +39,6 @@ export interface MovingStokesParams {
   gmres: GmresOptions;
 }
 
-const GEOMETRY_FED = ['vt1', 'vt2', 'vt3', 'vp1', 'vp2', 'vp3', 'n1', 'n2', 'n3', 'H', 'K', 'sqrtg', 'dp1', 'p2', 'dq2', 'jinv'];
-/** The position's derivative fields (lib/posderivs.m), which the bending force's derivative reuses. */
-const DERIVS = ['sxt', 'xp', 'sxtt', 'sxtp', 'xpp'].flatMap((n) => [1, 2, 3].map((c) => `${n}${c}`));
-const BENDLIN_FED = ['BF1', 'BF2', 'BF3', 'ba', 'bb', 'braw', 'bvc'];
-const TABLES = ['i11', 'i12', 'i13', 'i21', 'i22', 'i23', 'i31', 'i32', 'i33', 'w11', 'w12', 'w21', 'w22', 'itor'];
 /** Relative determinant below which the volume block is treated as singular (as the C++). */
 const SCALAR_BLOCK_TOL = 1e-6;
 
@@ -96,30 +92,33 @@ export class MovingStokes {
     for (const n of ['mass', 'visc', 'dt', 'disp', 'bscale', 'vol', 'cr00', 'crlam', 'ar00', 'arlam', 'ub', 'R', 'qdiv', 'y00'])
       bindings[n] = param;
     bindings.Z5 = { kind: 'tensor', shape: [1, 1] };
-    for (const n of ['X1', 'X2', 'X3', 'U1', 'U2', 'U3', 'Z1', 'Z2', 'Z3', 'Z4', 'BF1', 'BF2', 'BF3', 'NC1', 'NC2', 'NC3',
-      'keep', 'clean', 'filtf', 'ilam', 'cutv', 'lam', 'real0', 'e0', ...TABLES]) bindings[n] = spec;
-    for (const n of ['ct', 'st', 'cp', 'sp', 'wq', 'v1', 'v2', 'v3', 'ba', 'bb', 'braw', 'bvc', ...GEOMETRY_FED, ...DERIVS])
-      bindings[n] = grid;
-    const fed = (names: string[]) => Object.fromEntries(names.map((n) => [n, n]));
+    for (const n of ['X1', 'X2', 'X3', 'U1', 'U2', 'U3', 'Z1', 'Z2', 'Z3', 'Z4', 'BF1', 'BF2', 'BF3', 'NC1', 'NC2', 'NC3'])
+      bindings[n] = spec;
+    for (const n of ['v1', 'v2', 'v3']) bindings[n] = grid;
+    Object.assign(bindings, {
+      geo: structOf(GEO_FIELDS, grid),
+      der: structOf(DER_FIELDS, grid),
+      bl: structOf(BL_FIELDS, grid),
+      grid: structOf(GRID_FIELDS, grid),
+      msk: structOf(MSK_FIELDS, spec),
+      tab: structOf(TAB_FIELDS, spec),
+    });
     const make = (source: string, name: string, nargout: number, feedback?: Record<string, string>) =>
       GpuFunction.create({ device, sht, deriv, bindings, host, libs: operatorLibs, source, name, nargout, feedback });
     const fns = {
-      geometry: await make(geometrySource, 'geometry', 16, fed(GEOMETRY_FED)),
-      posderivs: await make(posderivsSource, 'posderivs', 15, fed(DERIVS)),
+      geometry: await make(geometrySource, 'geometry', 16, into('geo', GEO_FIELDS)),
+      posderivs: await make(posderivsSource, 'posderivs', 15, into('der', DER_FIELDS)),
       setup: await make(modelSource, 'setup', 4, { v1: 'v1', v2: 'v2', v3: 'v3' }),
-      bendlin: await make(modelSource, 'bendlin', 7, fed(BENDLIN_FED)),
-      volblock: await make(modelSource, 'volblock', 7, fed(['NC1', 'NC2', 'NC3'])),
+      bendlin: await make(modelSource, 'bendlin', 7, { BF1: 'BF1', BF2: 'BF2', BF3: 'BF3', ...into('bl', BL_FIELDS) }),
+      volblock: await make(modelSource, 'volblock', 7, { NC1: 'NC1', NC2: 'NC2', NC3: 'NC3' }),
       rhs: await make(modelSource, 'rhs', 5),
       matvec: await make(modelSource, 'matvec', 5),
       advance: await make(modelSource, 'advance', 3, { Y1: 'X1', Y2: 'X2', Y3: 'X3' }),
       diag: await make(modelSource, 'diag', 4),
       position: await make(modelSource, 'position', 3),
     };
-    const frame = gridFrame(cfg);
-    const up = (name: string, data: Float32Array) => host.get(name) && host.upload(name, data);
-    for (const [name, data] of Object.entries(frame)) up(name, data);
-    up('wq', chartWeights(cfg));
-    for (const [name, data] of Object.entries(spectralMasks(cfg, lmax))) up(name, data);
+    for (const [name, data] of Object.entries({ ...gridFrame(cfg), wq: chartWeights(cfg) })) host.upload(`grid.${name}`, data);
+    for (const [name, data] of Object.entries(spectralMasks(cfg, lmax))) host.upload(`msk.${name}`, data);
     const ms = new MovingStokes(lmax, cfg, prm, sht, deriv, host, fns);
     ms.#bindings = bindings;
     ms.#device = device;
@@ -177,7 +176,7 @@ export class MovingStokes {
     const R = Math.sqrt(this.area / (4 * Math.PI));
     const mass = 1 / dt;
     const tables = sphereBlockTables(this.cfg, { mass, disp: dt, re, be, R });
-    for (const name of TABLES) this.#host.upload(name, tables[name]);
+    for (const name of TAB_FIELDS) this.#host.upload(`tab.${name}`, tables[name]);
     const params: Record<string, number> = {
       mass, visc: 2 / re, dt, disp: dt, bscale: Number.isFinite(be) ? -2 / be : 0,
       R, qdiv: mass + 4 / (re * R * R), y00: 1 / (2 * Math.sqrt(Math.PI)),
