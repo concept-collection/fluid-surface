@@ -671,9 +671,16 @@ export class ModelPlan {
     const planned: Planned[] = [];
     // A kernel binds its output, its inputs and the parameters; lines that
     // read more arrays than the device allows are split (src/mgpu/split.ts).
+    // Each statement is split as it is planned, when what has a buffer is
+    // known: arrays, and single-element values in buffers; a parameter, a
+    // constant or a scalar derived from them is bound as a value instead. A
+    // scalar not yet planned (inside a loop body) counts as a buffer.
     const budget = device.limits.maxStorageBuffersPerShaderStage - 2;
-    for (const stmt of splitWideKernels(fn.body, budget)) {
-      await planStatement(stmt);
+    const isBuffer = (v: IRExpr & { kind: 'Var' }): boolean =>
+      isTensor(v.ty) || slots.has(v.cName) ||
+      !(isNumeric(v.ty) && typeof v.ty.exact === 'number') && !paramSlots.has(v.cName) && !derivedScalars.has(v.cName);
+    for (const top of fn.body) {
+      for (const stmt of splitWideKernels([top], budget, isBuffer)) await planStatement(stmt);
     }
 
     // Feed declared outputs back into the argument buffers they replace.

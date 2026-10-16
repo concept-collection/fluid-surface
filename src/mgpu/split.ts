@@ -13,6 +13,11 @@
  * subtree that reads the most arrays while fitting by itself, which removes
  * the most bindings from the parent. A statement that fits is left alone, so
  * fusion is undone only where the device requires it.
+ *
+ * What counts is every buffer a kernel binds: the arrays, and also a
+ * single-element value that lives in a buffer (a `dot` result, or a scalar
+ * input such as the volume multiplier), which the planner knows; it passes
+ * `isBuffer`.
  */
 import { isMultiElement } from 'numbl-src/numbl-core/jit/lowering/types.ts';
 import type { Assign, IRExpr, IRStmt } from 'numbl-src/numbl-core/jit/lowering/ir.ts';
@@ -35,13 +40,17 @@ const children = childSlots;
  * Returns `body` with over-wide element-wise statements split, recursing into
  * loop bodies. `budget` is the most arrays one kernel may read.
  */
-export function splitWideKernels(body: IRStmt[], budget: number): IRStmt[] {
+export function splitWideKernels(
+  body: IRStmt[],
+  budget: number,
+  isBuffer: (v: IRExpr & { kind: 'Var' }) => boolean = (v) => isTensor(v.ty),
+): IRStmt[] {
   let fresh = 0;
-  const isArray = (v: IRExpr & { kind: 'Var' }) => isTensor(v.ty);
+  const isArray = isBuffer;
   const out: IRStmt[] = [];
   for (const stmt of body) {
     if (stmt.kind === 'For') {
-      stmt.body = splitWideKernels(stmt.body, budget);
+      stmt.body = splitWideKernels(stmt.body, budget, isBuffer);
       out.push(stmt);
       continue;
     }
