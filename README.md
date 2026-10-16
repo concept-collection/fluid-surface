@@ -101,6 +101,8 @@ scripts/cpp/build.sh <evolving_surface>/cpp <evolving_surface>/cpp/build-cpu
 
 ### The page
 
+Live at https://concept-collection.github.io/fluid-surface/ (needs a browser with WebGPU), deployed from `main` by [`.github/workflows/deploy.yml`](.github/workflows/deploy.yml). Locally:
+
 ```bash
 npm run dev
 ```
