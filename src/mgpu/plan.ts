@@ -332,6 +332,7 @@ function kernelLayout(device: GPUDevice, inputs: number): GPUBindGroupLayout {
     buffer: { type: 'read-only-storage' },
   });
   return device.createBindGroupLayout({
+    label: `mgpu-kernel-${inputs}-inputs`,
     entries: [
       {
         binding: 0,
@@ -362,7 +363,7 @@ async function makePipeline(
     );
   }
   const pipeline = await device.createComputePipelineAsync({
-    layout: device.createPipelineLayout({ bindGroupLayouts: [bindGroupLayout] }),
+    layout: device.createPipelineLayout({ label, bindGroupLayouts: [bindGroupLayout] }),
     compute: { module, entryPoint: 'main' },
     label,
   });

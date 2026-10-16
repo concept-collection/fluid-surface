@@ -186,13 +186,14 @@ export class DeviceGmres {
 
     const module = device.createShaderModule({ label: 'gmres', code: shader(n, m1) });
     const layout = device.createBindGroupLayout({
+      label: 'gmres',
       entries: [
         ...[0, 1, 3, 4].map((binding) => ({ binding, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'storage' as const } })),
         ...[2, 5, 6].map((binding) => ({ binding, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'read-only-storage' as const } })),
         { binding: 7, visibility: GPUShaderStage.COMPUTE, buffer: { type: 'uniform' as const, hasDynamicOffset: true } },
       ],
     });
-    const pipelineLayout = device.createPipelineLayout({ bindGroupLayouts: [layout] });
+    const pipelineLayout = device.createPipelineLayout({ label: 'gmres', bindGroupLayouts: [layout] });
     const pipe = (entryPoint: string, pass?: number) => device.createComputePipeline({
       label: `gmres-${entryPoint}${pass ?? ''}`, layout: pipelineLayout,
       compute: { module, entryPoint, constants: pass === undefined ? {} : { PASS: pass } },
@@ -215,12 +216,19 @@ export class DeviceGmres {
   }
 
   /** `wt` holds one weight per entry of a vector: 1 on the unknowns, 0 elsewhere. */
-  static create(device: GPUDevice, op: DeviceOperator, wt: Float32Array, opt: DeviceGmresOptions): DeviceGmres {
+  static async create(device: GPUDevice, op: DeviceOperator, wt: Float32Array, opt: DeviceGmresOptions): Promise<DeviceGmres> {
     const total = op.inputs.reduce((s, g) => s + g.count, 0);
     if (total !== wt.length || op.outputs.reduce((s, g) => s + g.count, 0) !== total) {
       throw new Error('DeviceGmres: the inputs, outputs and weights must have the same length');
     }
-    return new DeviceGmres(device, op, wt, opt);
+    device.pushErrorScope('validation');
+    const g = new DeviceGmres(device, op, wt, opt);
+    const err = await device.popErrorScope();
+    if (err) {
+      g.destroy();
+      throw new Error(`GMRES on the GPU: ${err.message}`);
+    }
+    return g;
   }
 
   #dispatch(pass: GPUComputePassEncoder, p: Pipe, slot: number, groups: number): void {

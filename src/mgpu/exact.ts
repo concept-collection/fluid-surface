@@ -345,7 +345,7 @@ async function makePipeline(
     );
   }
   const pipeline = await device.createComputePipelineAsync({
-    layout: device.createPipelineLayout({ bindGroupLayouts: [layout] }),
+    layout: device.createPipelineLayout({ label, bindGroupLayouts: [layout] }),
     compute: { module, entryPoint: 'main' },
     label,
   });

@@ -205,10 +205,30 @@ async function loop(): Promise<void> {
   } catch (e) {
     playing = false;
     playBtn.textContent = 'Play';
-    err.textContent = e instanceof Error ? e.message : String(e);
+    showError(e);
   } finally {
     busy = false;
   }
+}
+
+/** The device, for an error report: the adapter and the limits this app leans on. */
+function deviceReport(): string {
+  if (!device) return '';
+  const info = (device as GPUDevice & { adapterInfo?: GPUAdapterInfo }).adapterInfo;
+  const L = device.limits;
+  const adapter = info ? [info.vendor, info.architecture, info.description].filter(Boolean).join(' ') : 'unknown adapter';
+  return `\ndevice: ${adapter}; ${navigator.userAgent}\n` +
+    `limits: ${L.maxStorageBuffersPerShaderStage} storage buffers per stage, ` +
+    `storage binding ${L.maxStorageBufferBindingSize}, buffer ${L.maxBufferSize}, ` +
+    `workgroup storage ${L.maxComputeWorkgroupStorageSize}, invocations ${L.maxComputeInvocationsPerWorkgroup}, ` +
+    `features: ${[...device.features].join(', ')}`;
+}
+
+/** Shows an error, with the device it happened on. The first GPU validation
+ *  error is the one that says what went wrong; later ones follow from it. */
+function showError(e: unknown): void {
+  if (err.textContent) return;
+  err.textContent = (e instanceof Error ? e.message : String(e)) + deviceReport();
 }
 
 /** Runs a change with the loop stopped, then resumes it if it was playing. */
@@ -220,7 +240,7 @@ async function paused(task: () => Promise<void>): Promise<void> {
     err.textContent = '';
     await task();
   } catch (e) {
-    err.textContent = e instanceof Error ? e.message : String(e);
+    showError(e);
   }
   if (was) {
     playing = true;
@@ -245,6 +265,8 @@ async function start(): Promise<void> {
     err.textContent = `WebGPU is required: ${e instanceof Error ? e.message : String(e)}`;
     return;
   }
+  device.addEventListener('uncapturederror', (e) => showError(`GPU error: ${(e as GPUUncapturedErrorEvent).error.message}`));
+  void device.lost.then((info) => showError(`GPU device lost: ${info.message}`));
   showR0();
   const rebuild = () => void paused(() => build(Number(bandSel.value), Number(dtSel.value)));
   await paused(() => build(Number(bandSel.value), Number(dtSel.value)));

@@ -247,6 +247,8 @@ This list records each place the MATLAB could not say what was meant, or the com
 npm run test:node
 ```
 
+`-- --max-storage-buffers=8` runs them on a device asking for no more than WebGPU's default of 8 storage buffers per shader stage, as some browsers and GPUs offer; the generated kernels split to fit, and everything passes there too.
+
 Runs [`test/compileChecks.ts`](test/compileChecks.ts) (the compiler's struct arguments and vector fields), [`test/sphtorChecks.ts`](test/sphtorChecks.ts), [`test/geometryChecks.ts`](test/geometryChecks.ts), [`test/stokesChecks.ts`](test/stokesChecks.ts) and [`test/movingChecks.ts`](test/movingChecks.ts) (`-- --only=volume` for one suite) on desktop WebGPU (Google Dawn, the optional `webgpu` package). The SHTns results it compares against are in [`test/fixtures/`](test/fixtures/), written by [`scripts/shtns_sphtor_fixture.py`](scripts/shtns_sphtor_fixture.py), which needs the `shtns` Python package:
 
 ```bash

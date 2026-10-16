@@ -762,7 +762,7 @@ export async function describeAdapter(device: GPUDevice): Promise<string> {
 }
 
 /** Request an adapter/device suitable for the transforms. */
-export async function requestShtDevice(): Promise<GPUDevice> {
+export async function requestShtDevice(opt: { maxStorageBuffers?: number } = {}): Promise<GPUDevice> {
   if (!navigator.gpu) throw new Error('WebGPU is not available in this browser');
   const adapter = await navigator.gpu.requestAdapter();
   if (!adapter) throw new Error('No WebGPU adapter available');
@@ -788,7 +788,8 @@ export async function requestShtDevice(): Promise<GPUDevice> {
   // the surface geometry (lib/geometry.m) reads up to 7 per line, more than
   // WebGPU's default of 8 bindings leaves room for. Ask for what the adapter
   // has (16 on Dawn/Vulkan; desktop browsers commonly report 8 to 31).
-  const maxStorageBuffers = adapter.limits.maxStorageBuffersPerShaderStage;
+  // A cap (for testing what a smaller device does) cannot go below the default.
+  const maxStorageBuffers = Math.max(8, Math.min(adapter.limits.maxStorageBuffersPerShaderStage, opt.maxStorageBuffers ?? Infinity));
   return adapter.requestDevice({
     requiredFeatures: features,
     requiredLimits: {

@@ -6,6 +6,8 @@
  *   npm run test:node
  *
  * `--skip-without-gpu` lets a machine without a GPU say so and move on.
+ * `--max-storage-buffers=8` asks for no more storage buffers per shader stage
+ * than that (WebGPU's default), as a browser or device that offers few would.
  */
 import { requestShtDevice } from '../src/sht/sht.ts';
 import { installWebGpu, errMsg, NO_ADAPTER_HINT } from './nodeWebGpu.ts';
@@ -24,12 +26,13 @@ const log = (s: string): void => console.log(s);
 
 const only = process.argv.find((a) => a.startsWith('--only='))?.slice(7);
 const skipWithoutGpu = process.argv.includes('--skip-without-gpu');
+const maxStorageBuffers = Number(process.argv.find((a) => a.startsWith('--max-storage-buffers='))?.slice(22)) || undefined;
 
 let runtime: string;
 let device: GPUDevice;
 try {
   runtime = await installWebGpu();
-  device = await requestShtDevice();
+  device = await requestShtDevice({ maxStorageBuffers });
 } catch (e) {
   const detail = `${errMsg(e)}\n${NO_ADAPTER_HINT}`;
   if (skipWithoutGpu) {
@@ -39,7 +42,11 @@ try {
   console.error(`test-node: ${detail}`);
   process.exit(1);
 }
-console.log(`fluid-surface tests — ${runtime}\n`);
+console.log(`fluid-surface tests — ${runtime}, ${device.limits.maxStorageBuffersPerShaderStage} storage buffers per shader stage\n`);
+device.addEventListener('uncapturederror', (e) => {
+  failures++;
+  console.log(`GPU ERROR  ${(e as GPUUncapturedErrorEvent).error.message}`);
+});
 
 const suites: [string, (d: GPUDevice, c: typeof check, l: typeof log) => Promise<void>][] = [
   ['compile', compileChecks],

@@ -74,6 +74,7 @@ export class ReducePlan {
       buffer: { type },
     });
     this.#layout = device.createBindGroupLayout({
+      label: 'mgpu-dot',
       entries: [entry(0, 'storage'), entry(1, 'read-only-storage'), entry(2, 'read-only-storage')],
     });
   }
@@ -94,7 +95,7 @@ export class ReducePlan {
       );
     }
     const pipeline = await device.createComputePipelineAsync({
-      layout: device.createPipelineLayout({ bindGroupLayouts: [this.#layout] }),
+      layout: device.createPipelineLayout({ label: `dot-${n}`, bindGroupLayouts: [this.#layout] }),
       compute: { module, entryPoint: 'main' },
       label: `dot-${n}`,
     });

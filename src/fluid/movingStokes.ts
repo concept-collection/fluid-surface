@@ -219,7 +219,7 @@ export class MovingStokes {
 
   /** GMRES on the GPU around the compiled matvec: a vector is Z1..Z4 and Z5
    *  end to end, weighted to the working band's unknowns. */
-  #deviceGmres(): DeviceGmres {
+  async #deviceGmres(): Promise<DeviceGmres> {
     if (this.#dgmres) return this.#dgmres;
     const mv = this.fns.matvec;
     const seg = (name: string, count: number) => ({ buffer: mv.buffer(name)!, count });
@@ -227,7 +227,7 @@ export class MovingStokes {
     const wt = new Float32Array(4 * L + 1);
     for (let f = 0; f < 4; f++) for (const i of this.#idx) wt[f * L + i] = 1;
     wt[4 * L] = 1;
-    this.#dgmres = DeviceGmres.create(this.#device, {
+    this.#dgmres = await DeviceGmres.create(this.#device, {
       inputs: [seg('Z1', L), seg('Z2', L), seg('Z3', L), seg('Z4', L), seg('Z5', 1)],
       outputs: [seg('R1', L), seg('R2', L), seg('R3', L), seg('RP', L), seg('RL', 1)],
       encode: (enc) => mv.encode(enc),
@@ -247,7 +247,7 @@ export class MovingStokes {
   /** Solves the step's system: on the GPU, or with the host's GMRES around apply. */
   async #solve(b: Float64Array, s: FluidState): Promise<{ x: Float32Array[]; lam: number; info: StepInfo }> {
     if (this.prm.gmres.device) {
-      const dg = this.#deviceGmres();
+      const dg = await this.#deviceGmres();
       const info = await dg.solve(this.#flat(this.unpack(b, 4), b[b.length - 1]), this.#flat([...s.U, s.P], s.lam), this.prm.gmres);
       const x = await dg.readX();
       const L = this.#nlm2;

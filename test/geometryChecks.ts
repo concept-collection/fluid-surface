@@ -56,12 +56,14 @@ export async function geometryChecks(device: GPUDevice, check: Check, log: Log):
     const g = await compileGeometry(device, cfg);
     // A fusion guard: one kernel per line. If fusion stops short the answers
     // stay right and this count jumps (it was 93 before numbl#66, and 31
-    // before numbl fused a call on an expression).
+    // before numbl fused a call on an expression). A device with fewer than 16
+    // storage buffers per stage splits some lines (src/mgpu/split.ts): 33 at 8.
     const ops = g.fn.describe().map((l) => l.trim().split(/\s+/)[0]);
     const count = (k: string): number => ops.filter((o) => o === k).length;
+    const bound = device.limits.maxStorageBuffersPerShaderStage >= 16 ? 29 : 33;
     check(
-      'geometry: geometry.m fuses to one kernel per line',
-      count('kernel') <= 29,
+      `geometry: geometry.m fuses to one kernel per line (at most ${bound} kernels with ${device.limits.maxStorageBuffersPerShaderStage} storage buffers per stage)`,
+      count('kernel') <= bound,
       `${ops.length} GPU operations: ${count('synth')} syntheses, ` +
         `${count('dthetac') + count('dphic')} shuffles, ${count('kernel')} kernels`,
     );
