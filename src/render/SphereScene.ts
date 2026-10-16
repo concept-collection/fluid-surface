@@ -118,6 +118,8 @@ export class SphereScene {
     const velocityAttr = new THREE.BufferAttribute(new Float32Array(numVertices * 3), 3);
     velocityAttr.setUsage(THREE.DynamicDrawUsage);
     this.#geometry.setAttribute('velocity', velocityAttr);
+    // The points the vertices label, fixed: where the streamlines' noise lives.
+    this.#geometry.setAttribute('ref', new THREE.BufferAttribute(positions.slice(), 3));
     this.#geometry.setIndex(new THREE.BufferAttribute(indices, 1));
     this.#geometry.computeVertexNormals();
     this.#geometry.computeBoundingSphere();
@@ -226,7 +228,9 @@ export class SphereScene {
   /**
    * Streamlines of a tangent field (x, y, z per vertex, world frame) by line
    * integral convolution over the colours; `vmax` is its largest speed, which
-   * the streaks fade out against. null removes them.
+   * the streaks fade out against. The noise they smear is a function of the
+   * positions the scene was constructed with, so it stays on the surface.
+   * null removes them.
    */
   setStreamlines(velocity: Float32Array | null, vmax = 0): void {
     if (!velocity) {
