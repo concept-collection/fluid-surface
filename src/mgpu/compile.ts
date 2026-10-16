@@ -220,25 +220,10 @@ export class CompiledModel {
       })),
     );
 
-    // numbl's pass makes one substitution per sweep and stops after 32
-    // sweeps, so a body with more single-use temps than that (lib/geometry.m
-    // has ~70) comes back only partly fused. Each substitution removes a
-    // statement, so rerunning until the statement count stops falling reaches
-    // the fixed point the pass intends.
-    const size = (): number =>
-      [...entries.values()].reduce((n, fn) => n + countStmts(fn.body), 0);
-    for (let before = Infinity; size() < before; ) {
-      before = size();
-      inlinePass({ topLevelStmts: [], functions: entries });
-    }
+    inlinePass({ topLevelStmts: [], functions: entries });
 
     for (const { fn, loop, assignedBefore } of loops) checkLoopEscapes(fn, loop, assignedBefore);
   }
-}
-
-/** Statements in a list, including those inside loops. */
-function countStmts(stmts: IRStmt[]): number {
-  return stmts.reduce((n, s) => n + 1 + (s.kind === 'For' ? countStmts(s.body) : 0), 0);
 }
 
 /** Every `for` in a statement list, including nested ones. */

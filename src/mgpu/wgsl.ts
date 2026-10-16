@@ -66,6 +66,9 @@ const CALL_FNS: Record<string, string> = {
   sin: 'sin',
   sinh: 'sinh',
   sqrt: 'sqrt',
+  // Real by declaration; WGSL's sqrt returns NaN for negative input, where
+  // MATLAB's realsqrt errors.
+  realsqrt: 'sqrt',
   tan: 'tan',
   tanh: 'tanh',
 };

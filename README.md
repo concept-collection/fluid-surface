@@ -58,7 +58,7 @@ The fp32 error grows with lmax at the rate of the scalar analysis it is made of,
 
 [`lib/geometry.m`](lib/geometry.m) is the C++ solver's `FluidGeometryBuild`: from the coefficients of the position X, the dual tangent vectors, the unit normal, the mean and Gaussian curvatures, the area element and the four weights of the flux-form Laplace-Beltrami operator, 16 grid fields in all. Every derivative is taken in coefficient space and synthesized. The second theta derivative, which the C++ takes from its own recurrence, is written with the first-derivative shift alone, `sin^2(theta) u_thetatheta = (sin(theta) dtheta)^2 u - cos(theta) sin(theta) u_theta`, so no new external operation was needed. The position is zero-padded on the host to the product band (twice the working band) before the call, as in the C++.
 
-It compiles to 63 GPU operations: 15 syntheses in four batches, 15 coefficient shuffles and 33 element-wise kernels, one per line of MATLAB except for four around `sqrt(abs(.))`. Measured on Dawn (Intel Iris Xe):
+It compiles to 61 GPU operations: 15 syntheses in four batches, 15 coefficient shuffles and 31 element-wise kernels, one per line of MATLAB except for the line `id = 1 ./ realsqrt(ptt .* gpp - ptp.^2)`, which takes three. Measured on Dawn (Intel Iris Xe):
 
 | check | largest error |
 |---|---:|
@@ -84,8 +84,9 @@ scripts/cpp/build.sh <evolving_surface>/cpp <evolving_surface>/cpp/build-cpu
 This list records each place the MATLAB could not say what was meant, or the compiler did less than it should, since that is what a numbl paper has to report.
 
 - **A transposed shuffle** (step 1). `dthetat` is a new external operation, though it reuses the `dthetac` kernel.
-- **Real square roots** (step 2). `sqrt` of a value whose sign numbl cannot prove is complex, as in MATLAB, and complex arrays do not compile to WGSL. A determinant is nonnegative by Cauchy-Schwarz, which numbl cannot see, so the code says `sqrt(abs(detg))`. MATLAB's `realsqrt` would say it directly; numbl does not have it. The two lines with `sqrt(abs(.))` also compile to two and four kernels, where every other line fuses into one; why is not yet looked into.
-- **Fusion stopped at 32 substitutions** (step 2). numbl's inline pass makes one substitution per sweep and gives up after 32 sweeps, which left `geometry.m` at 123 operations instead of 63. [`src/mgpu/compile.ts`](src/mgpu/compile.ts) reruns the pass to its fixed point; the cap belongs in numbl.
+- **Real square roots** (step 2). `sqrt` of a value whose sign numbl cannot prove is complex, as in MATLAB, and complex arrays do not compile to WGSL. A determinant is nonnegative by Cauchy-Schwarz, which numbl cannot see. numbl now has MATLAB's `realsqrt` ([numbl#66](https://github.com/flatironinstitute/numbl/pull/66)), which says the result is real; before it, the code needed `sqrt(abs(detg))`.
+- **Fusion stopped at 32 substitutions** (step 2). numbl's inline pass made one substitution per sweep and gave up after 32 sweeps, which left `geometry.m` at 123 operations instead of 61. Fixed in numbl#66: the pass now runs to its fixed point.
+- **A call on an expression does not fuse** (step 2). `1 ./ realsqrt(ptt .* gpp - ptp.^2)` compiles to three kernels where `realsqrt(detg)` compiles to one: the expression inside the call is not folded into the kernel. Not yet looked into.
 - **Bindings per kernel** (step 2). A fused kernel binds every array its expression reads, and some geometry lines read seven, plus the output and the parameters, against WebGPU's default limit of 8 storage buffers. The device now asks for the adapter's limit (16 on this machine). Nothing yet splits a kernel that exceeds it.
 - **Vectors are three arrays.** A vector field is written as three scalar fields (`xt1`, `xt2`, `xt3`), and dot and cross products by hand.
 - **One band per function.** A function runs on one grid and one band, so the padding to the product band is done by the host. The matvec will need padding and truncation inside the `.m`.
@@ -111,8 +112,8 @@ python scripts/shtns_sphtor_fixture.py -lmax 16
 
 ## The numbl dependency
 
-numbl is a local `file:../../numbl` dependency, so a sibling checkout of numbl is required, as for turing-surface. We use its compiler internals, reached through the `numbl-src` alias in [`vite.config.ts`](vite.config.ts), and the surface we depend on is written down in [`src/mgpu/numbl.d.ts`](src/mgpu/numbl.d.ts).
+numbl is a local `file:../../numbl` dependency, so a sibling checkout of numbl is required, as for turing-surface. It must be at or after `3f63b47d` ([numbl#66](https://github.com/flatironinstitute/numbl/pull/66)), for `realsqrt` and the fixed-point inline pass. We use its compiler internals, reached through the `numbl-src` alias in [`vite.config.ts`](vite.config.ts), and the surface we depend on is written down in [`src/mgpu/numbl.d.ts`](src/mgpu/numbl.d.ts).
 
 ## Provenance and license
 
-`src/sht`, `src/mgpu`, `src/tools.ts` and `tools/` were copied from turing-surface at `167fa88`; the first commit here is that copy unchanged. Since then: `dthetat`, the inline pass run to its fixed point, and the storage-buffer limit requested from the adapter. CECILL-2.1, inherited from SHTns through shtns-webgpu.
+`src/sht`, `src/mgpu`, `src/tools.ts` and `tools/` were copied from turing-surface at `167fa88`; the first commit here is that copy unchanged. Since then: `dthetat`, `realsqrt` in the WGSL builtin table, and the storage-buffer limit requested from the adapter. CECILL-2.1, inherited from SHTns through shtns-webgpu.

@@ -111,14 +111,14 @@ export async function geometryChecks(device: GPUDevice, check: Check, log: Log):
     }
     const X = [x, y, z].map((f) => new Float32Array(ref.analys(f)));
     const g = await compileGeometry(device, cfg);
-    // A fusion guard: one kernel per line, bar the four around sqrt(abs(.)).
-    // If fusion stops short (numbl's inline pass caps its sweeps; see
-    // src/mgpu/compile.ts) the answers stay right and this count jumps.
+    // A fusion guard: one kernel per line, bar the two extra for the `id`
+    // line, whose realsqrt argument is an expression. If fusion stops short
+    // the answers stay right and this count jumps (it was 93 before numbl#66).
     const ops = g.fn.describe().map((l) => l.trim().split(/\s+/)[0]);
     const count = (k: string): number => ops.filter((o) => o === k).length;
     check(
       'geometry: geometry.m fuses to one kernel per line',
-      count('kernel') <= 33,
+      count('kernel') <= 31,
       `${ops.length} GPU operations: ${count('synth')} syntheses, ` +
         `${count('dthetac') + count('dphic')} shuffles, ${count('kernel')} kernels`,
     );

@@ -16,8 +16,8 @@
 % ct and st are cos(theta) and sin(theta) on the grid.
 %
 % The determinants are nonnegative (Cauchy-Schwarz), but numbl cannot prove
-% that, and sqrt of a value of unknown sign is complex in MATLAB; abs() says
-% the result is real. (MATLAB's realsqrt would say it directly.)
+% that, and sqrt of a value of unknown sign is complex in MATLAB, so the roots
+% are realsqrt.
 
 function [vt1, vt2, vt3, vp1, vp2, vp3, n1, n2, n3, H, K, sqrtg, dp1, p2, dq2, jinv] = geometry(X1, X2, X3, ct, st)
   T1 = dthetac(X1);
@@ -46,7 +46,7 @@ function [vt1, vt2, vt3, vp1, vp2, vp3, n1, n2, n3, H, K, sqrtg, dp1, p2, dq2, j
   gpp = xp1.^2 + xp2.^2 + xp3.^2;
   gtp = xt1 .* xp1 + xt2 .* xp2 + xt3 .* xp3;
   detg = gtt .* gpp - gtp.^2;
-  sqrtg = sqrt(abs(detg));
+  sqrtg = realsqrt(detg);
 
   % dual tangent vectors
   vt1 = (gpp .* xt1 - gtp .* xp1) ./ detg;
@@ -71,7 +71,7 @@ function [vt1, vt2, vt3, vp1, vp2, vp3, n1, n2, n3, H, K, sqrtg, dp1, p2, dq2, j
   % flux-form Laplacian weights, from the sin(theta)-scaled tangent
   ptt = sxt1.^2 + sxt2.^2 + sxt3.^2;
   ptp = sxt1 .* xp1 + sxt2 .* xp2 + sxt3 .* xp3;
-  id = 1 ./ sqrt(abs(ptt .* gpp - ptp.^2));
+  id = 1 ./ realsqrt(ptt .* gpp - ptp.^2);
   dp1 = gpp .* id - 1;
   p2 = -ptp .* id;
   dq2 = ptt .* id - 1;
