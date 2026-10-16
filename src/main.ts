@@ -4,7 +4,7 @@
  * compiled models/stokes.m), then draws the surface coloured by a geometry
  * field and records the energies.
  *
- * Changing the working band or dt rebuilds the solver; changing r0 restarts
+ * Changing lmax (the working band) or dt rebuilds the solver; changing r0 restarts
  * the run from rest.
  */
 import { requestShtDevice } from './sht/sht.ts';
@@ -90,9 +90,9 @@ function updateReference(): void {
   } else if (BUILT_IN[lmax] && dt === 0.005 && Math.abs(r0 - 0.4) < 1e-9) {
     ref = BUILT_IN[lmax];
     label = 'C++ fluid_run';
-    refNote.textContent = `Dashed: the C++ solver's fluid_run with the same settings (band ${lmax}, dt 0.005, r0 0.4, BDF-1, GMRES tol 1e-8), shipped with the page.`;
+    refNote.textContent = `Dashed: the C++ solver's fluid_run with the same settings (lmax ${lmax}, dt 0.005, r0 0.4, BDF-1, GMRES tol 1e-8), shipped with the page.`;
   } else {
-    refNote.textContent = 'No C++ reference for these settings (the page has band 16 and 32 at dt 0.005, r0 0.4). Run the command below and load its diagnostics.csv to compare.';
+    refNote.textContent = 'No C++ reference for these settings (the page has lmax 16 and 32 at dt 0.005, r0 0.4). Run the command below and load its diagnostics.csv to compare.';
   }
   chartEh.setReference(ref && { ts: ref.t, ys: ref.eh }, label);
   chartEkin.setReference(ref && { ts: ref.t, ys: ref.ekin }, label);
@@ -139,7 +139,7 @@ let run: Run | null = null;
 let playing = false;
 
 async function build(lmax: number, dt: number): Promise<void> {
-  stats.textContent = `compiling the solver for band ${lmax}...`;
+  stats.textContent = `compiling the solver for lmax ${lmax}...`;
   const ms = await MovingStokes.create(device, lmax, {
     re: RE, be: BE, volume: true, dt, gmres: { tol: 1e-6, restart: 200, maxCycles: 4, device: true },
   });
@@ -253,7 +253,7 @@ function draw(): void {
     `E_kin <b>${L.ekin.toPrecision(4)}</b> &middot; area ${L.area.toPrecision(6)} &middot; ` +
     `volume ${L.volume.toPrecision(6)} (drift ${((L.volume - r.volume0) / r.volume0).toExponential(1)}) &middot; ` +
     `multiplier ${r.state.lam.toPrecision(4)}${arrows}<br>` +
-    `band ${r.lmax}, product band ${lmax} on ${nlat} x ${nphi}, dt ${r.dt} &middot; ` +
+    `lmax ${r.lmax}, products at lmax ${lmax} on ${nlat} x ${nphi}, dt ${r.dt} &middot; ` +
     (r.step ? `${L.its} GMRES iterations, ${L.ms.toFixed(0)} ms per step` : 'at rest') +
     (L.converged ? '' : ' &middot; <span class="warn">GMRES did not reach its tolerance</span>');
 }
@@ -281,7 +281,7 @@ async function profile(): Promise<void> {
   await observe(p.iterations, performance.now() - t0, p.converged);
   draw();
   const ts = device.features.has('timestamp-query') ? '' : ' (no timestamp queries on this device, so no per-op times)';
-  out.textContent = [`profile of step ${r.step}, band ${r.lmax}${ts}:`, ...formatProfile(p)].join('\n');
+  out.textContent = [`profile of step ${r.step}, lmax ${r.lmax}${ts}:`, ...formatProfile(p)].join('\n');
 }
 
 /** The run loop: one step per frame while playing. */
