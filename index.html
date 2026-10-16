@@ -58,6 +58,27 @@
       .colorbar-label { font-size: 11px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
       .stats { margin-top: 10px; font-size: 13px; color: var(--ink-2); font-variant-numeric: tabular-nums; }
       .stats b { color: var(--ink); font-weight: 600; }
+      .stats .warn { color: #b35900; }
+      #charts { display: flex; flex-wrap: wrap; gap: 14px; margin-top: 12px; }
+      .chart { flex: 1 1 300px; max-width: 420px; border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px 4px; }
+      .chart-head { display: flex; justify-content: space-between; font-size: 13px; }
+      .chart-title { color: var(--ink-2); }
+      .chart-value { color: var(--ink); font-variant-numeric: tabular-nums; }
+      .chart-box { position: relative; }
+      .chart-box svg { display: block; width: 100%; height: auto; }
+      .chart-axis { stroke: var(--line); stroke-width: 1; }
+      .chart-grid { stroke: var(--line); stroke-width: 1; stroke-dasharray: 2 3; }
+      .chart-label { fill: var(--ink-2); font-size: 10px; font-variant-numeric: tabular-nums; }
+      .chart-line { stroke: var(--accent); stroke-width: 2; stroke-linejoin: round; stroke-linecap: round; }
+      .chart-cross { stroke: var(--ink-2); stroke-width: 1; }
+      .chart-dot { fill: var(--accent); stroke: var(--bg); stroke-width: 2; }
+      .chart-tip {
+        position: absolute; top: 2px; transform: translateX(-50%); pointer-events: none;
+        font-size: 12px; color: var(--ink); background: var(--bg); border: 1px solid var(--line);
+        border-radius: 4px; padding: 1px 6px; white-space: nowrap; font-variant-numeric: tabular-nums;
+      }
+      button.primary { border-color: var(--accent); color: var(--accent); font-weight: 600; min-width: 5.5em; }
+      input[type="number"] { width: 5em; }
       #err { color: #b35900; white-space: pre-wrap; font-size: 13px; }
       details.src { margin-top: 12px; border: 1px solid var(--line); border-radius: 8px; overflow: hidden; }
       details.src > summary { cursor: pointer; padding: 6px 10px; font-size: 13px; color: var(--ink-2); background: var(--sphere-bg); }
@@ -74,14 +95,17 @@
     <main>
       <h1>fluid-surface</h1>
       <p class="sub">
-        The surface geometry of Krause &amp; Voigt's perturbed sphere, r = 1 + r0 cos(phi) sin(3 theta), computed on the GPU by <code>lib/geometry.m</code>, compiled to WebGPU by numbl. Step 2 of a port of a fluid deformable surface solver to the browser.
+        A fluid deformable surface: Krause &amp; Voigt's perturbed sphere, r = 1 + r0 cos(phi) sin(3 theta), released at rest, with surface viscosity (Re 1), bending (Be 2) and its enclosed volume held fixed. Every step is MATLAB (<code>models/stokes.m</code> and <code>lib/</code>) compiled to WebGPU by numbl, solved by GMRES. A port of Dan Fortunato's C++ solver; BDF-1 with a fixed time step.
         <a href="https://github.com/concept-collection/fluid-surface">Source</a>.
       </p>
       <div class="controls">
-        <label>field <select id="field"></select></label>
-        <label>r0 <input id="r0" type="range" min="0" max="0.6" step="0.01" value="0.4" /> <span id="r0val" class="val"></span></label>
+        <button id="play" class="primary">Play</button>
+        <button id="reset">Reset</button>
+        <label>colour <select id="field"></select></label>
         <label>working band <select id="band"></select></label>
-        <button id="reset">Reset view</button>
+        <label>dt <select id="dt"></select></label>
+        <label>r0 <input id="r0" type="range" min="0.05" max="0.5" step="0.05" value="0.4" /> <span id="r0val" class="val"></span></label>
+        <button id="view">Reset view</button>
       </div>
       <div id="panels">
         <div class="panel">
@@ -90,9 +114,10 @@
         </div>
       </div>
       <div class="stats" id="stats"></div>
+      <div id="charts"><div id="chart-eh"></div><div id="chart-ekin"></div></div>
       <div id="err"></div>
       <details class="src">
-        <summary>lib/geometry.m, and the GPU operations it compiles to</summary>
+        <summary>models/stokes.m, and the GPU operations its matvec compiles to</summary>
         <div class="src-body"><pre id="source"></pre><pre id="ops"></pre></div>
       </details>
     </main>

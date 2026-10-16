@@ -1,181 +1,225 @@
 /**
- * The first page: Krause & Voigt's perturbed sphere, coloured by a geometry
- * field that lib/geometry.m computes on the GPU.
+ * The page: Krause & Voigt's perturbed sphere, run live. Each frame advances
+ * the fluid one BDF-1 step on the GPU (src/fluid/movingStokes.ts, the
+ * compiled models/stokes.m), then draws the surface coloured by a geometry
+ * field and records the energies.
  *
- * Moving r0 rebuilds the position's coefficients on the host (f64, as the C++
- * solver does) and reruns the compiled geometry; changing the working band
- * recompiles it for the new product grid.
+ * Changing the working band or dt rebuilds the solver; changing r0 restarts
+ * the run from rest.
  */
 import { requestShtDevice } from './sht/sht.ts';
-import { GEOMETRY_OUTPUTS, SurfaceGeometry, perturbedSphere, productConfig, type GeometryOutput } from './geom/geometry.ts';
+import { gaussNodesWeights } from './sht/gauss.ts';
+import { perturbedSphere, productConfig } from './geom/geometry.ts';
+import { MovingStokes, type FluidState } from './fluid/movingStokes.ts';
 import { SphereScene } from './render/SphereScene.ts';
 import { buildTopology, fillColors, fillFieldValues, fillPositions, type SphereMeshTopology } from './render/sphereMesh.ts';
 import { colormaps } from './render/colormaps.ts';
 import { Colorbar, floorRange } from './render/colorbar.ts';
-import geometrySource from '../lib/geometry.m?raw';
+import { LineChart } from './render/lineChart.ts';
+import modelSource from '../models/stokes.m?raw';
 
-const FIELDS: { key: GeometryOutput; label: string }[] = [
+const RE = 1;
+const BE = 2;
+type Field = 'H' | 'K' | 'sqrtg';
+const FIELDS: { key: Field; label: string }[] = [
   { key: 'H', label: 'mean curvature H' },
   { key: 'K', label: 'Gaussian curvature K' },
-  { key: 'sqrtg', label: 'area element sqrt(det g)' },
+  { key: 'sqrtg', label: 'area element' },
 ];
-const BANDS = [12, 16, 24, 32, 48];
+const BANDS = [12, 16, 24, 32];
+const DTS = [0.0025, 0.005, 0.01, 0.02];
 
 const $ = <T extends HTMLElement>(id: string): T => document.getElementById(id) as T;
+const playBtn = $<HTMLButtonElement>('play');
 const fieldSel = $<HTMLSelectElement>('field');
-const r0Input = $<HTMLInputElement>('r0');
-const r0Val = $<HTMLSpanElement>('r0val');
 const bandSel = $<HTMLSelectElement>('band');
+const dtSel = $<HTMLSelectElement>('dt');
+const r0Input = $<HTMLInputElement>('r0');
 const stats = $<HTMLDivElement>('stats');
 const err = $<HTMLDivElement>('err');
 const sphereBox = $<HTMLDivElement>('sphere');
 
 for (const f of FIELDS) fieldSel.add(new Option(f.label, f.key));
 for (const b of BANDS) bandSel.add(new Option(String(b), String(b)));
-bandSel.value = '32';
-$<HTMLPreElement>('source').textContent = geometrySource;
+for (const d of DTS) dtSel.add(new Option(String(d), String(d)));
+bandSel.value = '16';
+dtSel.value = '0.005';
+$<HTMLPreElement>('source').textContent = modelSource;
 
 const colorbar = new Colorbar($<HTMLDivElement>('colorbar'));
 const cmap = colormaps.viridis;
+const chartEh = new LineChart($<HTMLDivElement>('chart-eh'), 'bending energy E_h');
+const chartEkin = new LineChart($<HTMLDivElement>('chart-ekin'), 'kinetic energy E_kin');
 
-interface View {
+let device: GPUDevice;
+
+/** The solver for one band and dt, its mesh, and the run's state. */
+interface Run {
   lmax: number;
-  geo: SurfaceGeometry;
+  dt: number;
+  ms: MovingStokes;
   topo: SphereMeshTopology;
   scene: SphereScene;
   positions: Float32Array;
   values: Float32Array;
   colors: Float32Array;
-  /** Fit the camera after the first computation on this grid. */
-  needsFit: boolean;
+  state: FluidState;
+  step: number;
+  /** The last frame's numbers, for the stats line. */
+  last: { ekin: number; eh: number; area: number; volume: number; its: number; ms: number; converged: boolean };
+  field: Float32Array | null;
+  volume0: number;
 }
 
-let device: GPUDevice;
-let view: View | null = null;
-/** The geometry's fields from the last run, and the time it took. */
-let fields: Partial<Record<GeometryOutput, Float32Array>> = {};
-let lastMs = 0;
+let run: Run | null = null;
+let playing = false;
 
-async function buildView(lmax: number): Promise<void> {
-  const cfg = productConfig(lmax);
-  const geo = await SurfaceGeometry.create(device, cfg);
-  const phi = Float64Array.from({ length: cfg.nphi }, (_, j) => (2 * Math.PI * j) / cfg.nphi);
-  const topo = buildTopology(geo.sht.cosTheta, phi);
-  view?.scene.dispose();
-  view?.geo.destroy();
+async function build(lmax: number, dt: number): Promise<void> {
+  stats.textContent = `compiling the solver for band ${lmax}...`;
+  const ms = await MovingStokes.create(device, lmax, {
+    re: RE, be: BE, volume: true, dt, gmres: { tol: 1e-6, restart: 200, maxCycles: 4 },
+  });
+  const { nlat, nphi } = ms.cfg;
+  const phi = Float64Array.from({ length: nphi }, (_, j) => (2 * Math.PI * j) / nphi);
+  const topo = buildTopology(gaussNodesWeights(nlat).x, phi);
+  run?.scene.dispose();
+  run?.ms.destroy();
   sphereBox.replaceChildren();
   const background = getComputedStyle(document.documentElement).getPropertyValue('--sphere-bg').trim();
   const scene = new SphereScene(sphereBox, topo.numVertices, topo.indices, new Float32Array(topo.sphereRef), background || undefined);
-  view = {
-    lmax,
-    geo,
-    topo,
-    scene,
+  run = {
+    lmax, dt, ms, topo, scene,
     positions: new Float32Array(topo.numVertices * 3),
     values: new Float32Array(topo.numVertices),
     colors: new Float32Array(topo.numVertices * 3),
-    needsFit: true,
+    state: { U: [], P: new Float32Array(0), lam: 0 },
+    step: 0,
+    last: { ekin: 0, eh: 0, area: 0, volume: 0, its: 0, ms: 0, converged: true },
+    field: null,
+    volume0: 0,
   };
   resize();
-  $<HTMLPreElement>('ops').textContent = geo.fn.describe().join('\n');
+  const ops = ms.fns.matvec.describe();
+  $<HTMLPreElement>('ops').textContent = `${ops.length} GPU operations\n\n${ops.join('\n')}`;
+  await reset();
+  scene.fitCamera();
 }
 
-/** Rebuild the surface for the current r0 and rerun the geometry. */
-async function compute(): Promise<void> {
-  if (!view) return;
-  const v = view;
-  const r0 = Number(r0Input.value);
-  const X = perturbedSphere(v.geo.cfg, v.lmax, r0);
-  const t0 = performance.now();
-  v.geo.compute(X);
-  await device.queue.onSubmittedWorkDone();
-  lastMs = performance.now() - t0;
-  const next: Partial<Record<GeometryOutput, Float32Array>> = {};
-  for (const f of FIELDS) next[f.key] = await v.geo.read(f.key);
-  fields = next;
+/** Back to rest on the perturbed sphere of the current r0. */
+async function reset(): Promise<void> {
+  if (!run) return;
+  const r = run;
+  const cfg = productConfig(r.lmax);
+  r.ms.setSurface(perturbedSphere(cfg, r.lmax, Number(r0Input.value)));
+  const zero = () => new Float32Array((cfg.lmax + 1) * (cfg.lmax + 2));
+  r.state = { U: [zero(), zero(), zero()], P: zero(), lam: 0 };
+  r.step = 0;
+  chartEh.clear();
+  chartEkin.clear();
+  await observe(0, 0, true);
+  r.volume0 = r.last.volume;
+  draw();
+}
 
-  // The surface itself, synthesized from the same coefficients.
-  // One at a time: ShtPlan's CPU convenience shares one readback buffer.
-  const grid: Float32Array[] = [];
-  for (const x of X) grid.push(await v.geo.sht.synth(x));
-  const n = v.geo.cfg.nlat * v.geo.cfg.nphi;
+/** Records the energies and reads what the frame draws. */
+async function observe(its: number, ms: number, converged: boolean): Promise<void> {
+  const r = run!;
+  const d = await r.ms.diagnostics(r.state.U);
+  r.last = { ekin: d.ekin, eh: (2 / BE) * d.h2, area: d.area, volume: d.volume, its, ms, converged };
+  const t = r.step * r.dt;
+  chartEh.push(t, r.last.eh);
+  chartEkin.push(t, r.last.ekin);
+  const grid = await r.ms.surfaceGrid();
+  const n = r.ms.cfg.nlat * r.ms.cfg.nphi;
   const coords = new Float32Array(3 * n);
   for (let k = 0; k < n; k++) for (let c = 0; c < 3; c++) coords[3 * k + c] = grid[c][k];
-  fillPositions(v.positions, coords, v.topo, 1);
-  v.scene.updatePositions(v.positions);
-  if (v.needsFit) {
-    v.scene.fitCamera();
-    v.needsFit = false;
-  }
-  paint();
+  fillPositions(r.positions, coords, r.topo, 1);
+  r.field = await r.ms.geometryField(fieldSel.value as Field);
 }
 
-/** Colour the surface by the selected field. */
-function paint(): void {
-  const v = view;
-  const key = fieldSel.value as GeometryOutput;
-  const data = fields[key];
-  if (!v || !data) return;
-  fillFieldValues(v.values, data, v.topo);
+function draw(): void {
+  const r = run;
+  if (!r || !r.field) return;
+  r.scene.updatePositions(r.positions);
+  fillFieldValues(r.values, r.field, r.topo);
   let lo = Infinity;
   let hi = -Infinity;
-  for (const x of data) {
+  for (const x of r.field) {
     lo = Math.min(lo, x);
     hi = Math.max(hi, x);
   }
-  // The colour range is floored so a near-constant field (H on the sphere)
-  // does not stretch its roundoff over the whole colormap; the stats line
-  // reports the data's own range.
   const shown = floorRange(lo, hi);
-  fillColors(v.colors, v.values, shown.lo, shown.hi, cmap);
-  v.scene.updateColors(v.colors);
+  fillColors(r.colors, r.values, shown.lo, shown.hi, cmap);
+  r.scene.updateColors(r.colors);
   colorbar.update(cmap, shown.lo, shown.hi);
-  const { nlat, nphi, lmax } = v.geo.cfg;
+  const L = r.last;
+  const t = r.step * r.dt;
+  const { nlat, nphi, lmax } = r.ms.cfg;
   stats.innerHTML =
-    `working band <b>${v.lmax}</b>, product band ${lmax} on ${nlat} x ${nphi} &middot; ` +
-    `geometry.m: <b>${v.geo.fn.describe().length}</b> GPU operations, ${GEOMETRY_OUTPUTS.length} fields, ` +
-    `<b>${lastMs.toFixed(2)} ms</b> including submit &middot; ` +
-    `${FIELDS.find((f) => f.key === key)!.label} in [${lo.toPrecision(7)}, ${hi.toPrecision(7)}]`;
+    `t <b>${t.toFixed(3)}</b> (step ${r.step}) &middot; E_h <b>${L.eh.toPrecision(6)}</b> &middot; ` +
+    `E_kin <b>${L.ekin.toPrecision(4)}</b> &middot; area ${L.area.toPrecision(6)} &middot; ` +
+    `volume ${L.volume.toPrecision(6)} (drift ${((L.volume - r.volume0) / r.volume0).toExponential(1)}) &middot; ` +
+    `multiplier ${r.state.lam.toPrecision(4)}<br>` +
+    `band ${r.lmax}, product band ${lmax} on ${nlat} x ${nphi}, dt ${r.dt} &middot; ` +
+    (r.step ? `${L.its} GMRES iterations, ${L.ms.toFixed(0)} ms per step` : 'at rest') +
+    (L.converged ? '' : ' &middot; <span class="warn">GMRES did not reach its tolerance</span>');
 }
 
-function resize(): void {
-  if (!view) return;
-  const r = sphereBox.getBoundingClientRect();
-  view.scene.resize(Math.round(r.width), Math.round(r.height));
+async function advance(): Promise<void> {
+  const r = run!;
+  const t0 = performance.now();
+  const res = await r.ms.step(r.state);
+  r.state = res.state;
+  r.step++;
+  const ms = performance.now() - t0;
+  await observe(res.info.iterations, ms, res.info.converged);
+  draw();
 }
 
-/**
- * One worker at a time. Input arriving while it runs only sets a flag, so a
- * burst of slider moves costs one more computation, and a band change is
- * never lost behind one.
- */
+/** The run loop: one step per frame while playing. */
 let busy = false;
-let wantBuild = false;
-let wantCompute = false;
-async function request(build: boolean): Promise<void> {
-  wantBuild ||= build;
-  wantCompute = true;
+async function loop(): Promise<void> {
   if (busy) return;
   busy = true;
   try {
-    while (wantBuild || wantCompute) {
-      if (wantBuild) {
-        wantBuild = false;
-        await buildView(Number(bandSel.value));
-      }
-      wantCompute = false;
-      await compute();
+    while (playing && run) {
+      await advance();
+      await new Promise((resolve) => requestAnimationFrame(resolve));
     }
-    err.textContent = '';
   } catch (e) {
+    playing = false;
+    playBtn.textContent = 'Play';
     err.textContent = e instanceof Error ? e.message : String(e);
   } finally {
     busy = false;
   }
 }
 
+/** Runs a change with the loop stopped, then resumes it if it was playing. */
+async function paused(task: () => Promise<void>): Promise<void> {
+  const was = playing;
+  playing = false;
+  while (busy) await new Promise((resolve) => setTimeout(resolve, 10));
+  try {
+    err.textContent = '';
+    await task();
+  } catch (e) {
+    err.textContent = e instanceof Error ? e.message : String(e);
+  }
+  if (was) {
+    playing = true;
+    void loop();
+  }
+}
+
+function resize(): void {
+  if (!run) return;
+  const b = sphereBox.getBoundingClientRect();
+  run.scene.resize(Math.round(b.width), Math.round(b.height));
+}
+
 function showR0(): void {
-  r0Val.textContent = Number(r0Input.value).toFixed(2);
+  $<HTMLSpanElement>('r0val').textContent = Number(r0Input.value).toFixed(2);
 }
 
 async function start(): Promise<void> {
@@ -186,14 +230,26 @@ async function start(): Promise<void> {
     return;
   }
   showR0();
-  await request(true);
-  r0Input.addEventListener('input', () => {
-    showR0();
-    void request(false);
+  const rebuild = () => void paused(() => build(Number(bandSel.value), Number(dtSel.value)));
+  await paused(() => build(Number(bandSel.value), Number(dtSel.value)));
+  playBtn.addEventListener('click', () => {
+    playing = !playing;
+    playBtn.textContent = playing ? 'Pause' : 'Play';
+    if (playing) void loop();
   });
-  fieldSel.addEventListener('change', paint);
-  bandSel.addEventListener('change', () => void request(true));
-  $<HTMLButtonElement>('reset').addEventListener('click', () => view?.scene.resetCamera());
+  $<HTMLButtonElement>('reset').addEventListener('click', () => void paused(reset));
+  r0Input.addEventListener('input', showR0);
+  r0Input.addEventListener('change', () => void paused(reset));
+  dtSel.addEventListener('change', rebuild);
+  bandSel.addEventListener('change', rebuild);
+  fieldSel.addEventListener('change', () =>
+    void paused(async () => {
+      if (!run) return;
+      run.field = await run.ms.geometryField(fieldSel.value as Field);
+      draw();
+    }),
+  );
+  $<HTMLButtonElement>('view').addEventListener('click', () => run?.scene.resetCamera());
   new ResizeObserver(resize).observe(sphereBox);
 }
 

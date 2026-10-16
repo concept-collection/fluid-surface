@@ -171,6 +171,11 @@ function [R1, R2, R3, RP, RL] = precond(M1, M2, M3, MP, ML, NC1, NC2, NC3, ct, s
   R3 = U3 .* clean;
 end
 
+% The surface's position on the grid, for drawing it.
+function [x1, x2, x3] = position(X1, X2, X3)
+  [x1, x2, x3] = synth(X1, X2, X3);
+end
+
 % Energies and integrals of the state, for comparing runs: the kinetic energy,
 % the integral of H^2 (the bending energy is 2/Be times it), the area and the
 % enclosed volume. X is the surface's position, with its geometry.

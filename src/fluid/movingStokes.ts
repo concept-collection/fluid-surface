@@ -57,7 +57,7 @@ export class MovingStokes {
   readonly lmax: number;
   readonly cfg: ShtConfig;
   readonly prm: MovingStokesParams;
-  readonly fns: Record<'geometry' | 'posderivs' | 'setup' | 'bendlin' | 'volblock' | 'rhs' | 'matvec' | 'advance' | 'diag', GpuFunction>;
+  readonly fns: Record<'geometry' | 'posderivs' | 'setup' | 'bendlin' | 'volblock' | 'rhs' | 'matvec' | 'advance' | 'diag' | 'position', GpuFunction>;
   /** The area at the last step's start. */
   area = 0;
   /** The volume constraint's 2 x 2 block at the last step's start, and whether it was used. */
@@ -113,6 +113,7 @@ export class MovingStokes {
       matvec: await make(modelSource, 'matvec', 5),
       advance: await make(modelSource, 'advance', 3, { Y1: 'X1', Y2: 'X2', Y3: 'X3' }),
       diag: await make(modelSource, 'diag', 4),
+      position: await make(modelSource, 'position', 3),
     };
     const frame = gridFrame(cfg);
     const up = (name: string, data: Float32Array) => host.get(name) && host.upload(name, data);
@@ -227,6 +228,18 @@ export class MovingStokes {
       state: { U: [U1, U2, U3], P: P1, lam },
       info: { iterations: res.iterations, converged: res.converged, relResid: res.relResid },
     };
+  }
+
+  /** The surface's position on the grid (x, y, z, each nlat * nphi). */
+  async surfaceGrid(): Promise<Float32Array[]> {
+    this.fns.position.run();
+    return this.fns.position.readMany(['x1', 'x2', 'x3']);
+  }
+
+  /** A geometry field of the surface as of the last geometry run (diagnostics
+   *  runs it on the current surface). */
+  async geometryField(name: 'H' | 'K' | 'sqrtg'): Promise<Float32Array> {
+    return this.fns.geometry.read(name);
   }
 
   /** Energies and integrals of a state on the current surface: kinetic energy,
