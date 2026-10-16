@@ -8,6 +8,11 @@
  * it costs one synchronization per iteration. The operator is already left-
  * preconditioned, so the residual it minimizes is the preconditioned one, as
  * in the C++. Orthogonalization is modified Gram-Schmidt, run twice.
+ *
+ * As in the C++ (and PETSc), the solve stops when GMRES's own estimate of the
+ * residual reaches the tolerance, and the explicit residual is computed once
+ * at the end, for the record. In fp32 the two part near 1e-6, where the
+ * explicit residual stalls (FLUID_FP32_TOL_FLOOR in the C++).
  */
 
 export interface GmresOptions {
@@ -21,6 +26,7 @@ export interface GmresOptions {
 export interface GmresResult {
   x: Float64Array;
   iterations: number;
+  /** Whether the residual estimate reached the tolerance. */
   converged: boolean;
   /** The explicit relative residual |b - A x| / |b| at the end. */
   relResid: number;
@@ -47,9 +53,13 @@ export async function gmres(
     return b.map((bi, i) => bi - ax[i]);
   };
   let r = await residual();
-  for (let cycle = 0; cycle < opt.maxCycles; cycle++) {
+  let converged = false;
+  for (let cycle = 0; cycle < opt.maxCycles && !converged; cycle++) {
     const beta = Math.sqrt(dot(r, r));
-    if (beta <= opt.tol * bnorm) return { x, iterations, converged: true, relResid: beta / bnorm };
+    if (beta <= opt.tol * bnorm) {
+      converged = true;
+      break;
+    }
     const m = opt.restart;
     const V: Float64Array[] = [r.map((v) => v / beta)];
     const H: number[][] = [];
@@ -68,7 +78,8 @@ export async function gmres(
           for (let i = 0; i < n; i++) w[i] -= c * V[j][i];
         }
       }
-      h[k + 1] = Math.sqrt(dot(w, w));
+      const wnorm = Math.sqrt(dot(w, w));
+      h[k + 1] = wnorm;
       // Apply the previous rotations to the new column, then make one more.
       for (let j = 0; j < k; j++) {
         const t = cs[j] * h[j] + sn[j] * h[j + 1];
@@ -83,12 +94,12 @@ export async function gmres(
       h[k] = rho;
       h[k + 1] = 0;
       H.push(h);
-      const breakdown = !(w.length && Number.isFinite(h[k]) && rho > 0);
-      if (Math.abs(g[k + 1]) <= opt.tol * bnorm || breakdown) {
+      if (Math.abs(g[k + 1]) <= opt.tol * bnorm || wnorm === 0) {
+        converged = true;
         k++;
         break;
       }
-      V.push(w.map((v) => v / Math.sqrt(dot(w, w))));
+      V.push(w.map((v) => v / wnorm));
     }
     // Back-substitute for the coefficients of the basis and update x.
     const y = new Float64Array(k);
@@ -101,5 +112,5 @@ export async function gmres(
     r = await residual();
   }
   const rn = Math.sqrt(dot(r, r));
-  return { x, iterations, converged: rn <= opt.tol * bnorm, relResid: rn / bnorm };
+  return { x, iterations, converged, relResid: rn / bnorm };
 }

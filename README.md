@@ -4,14 +4,14 @@ Fluid deformable surfaces in the browser: incompressible surface Navier-Stokes w
 
 The solver being ported is Dan Fortunato's C++ implementation in meliao/evolving_surface (cpu, CUDA and Metal backends). This is the sibling of [turing-surface](https://github.com/concept-collection/turing-surface), which solves reaction-diffusion on a fixed surface, and it starts from that project's transforms and compiler pipeline. The difference that keeps them apart is that here the geometry changes every step and each step is a saddle-point solve run to a tolerance, where turing-surface's design assumes a fixed surface and a fixed sequence of GPU operations.
 
-**Status:** steps 1 to 3 of 6: the vector analysis, the surface geometry (with a page that shows it), and the fluid solver's static mode on a fixed surface, checked against the C++ and against the exact BDF-1 decay rate. The surface does not move yet.
+**Status:** steps 1 to 4a of 6: the vector analysis, the surface geometry (with a page that shows it), the fluid solver's static mode on a fixed surface, and a moving surface without bending, each checked against the C++. Bending, the volume constraint, relabeling and two phases are still to come.
 
 ## Plan
 
 1. The vector (spheroidal/toroidal) analysis from scalar transforms, against SHTns. Done; see below.
 2. The surface geometry (normal, curvatures, area element) on the GPU from the position's coefficients, against the C++ cpu backend. Done; see below.
 3. A Killing field on a fixed surface: the matvec, the static preconditioner and GMRES, against the exact BDF-1 decay rate. Done; see below.
-4. The Stokes preconditioner, an evolving surface and bending: Krause & Voigt's perturbed sphere at lmax 32, against the C++.
+4. The moving surface, in three parts: (a) the operator without bending, the Stokes preconditioner and the normal-velocity update, done, see below; (b) bending; (c) the volume constraint, then Krause & Voigt's perturbed sphere at lmax 32 against the C++.
 5. Relabeling, then an adaptive time step.
 6. Two phases.
 
@@ -83,6 +83,14 @@ scripts/cpp/build.sh <evolving_surface>/cpp <evolving_surface>/cpp/build-cpu
 <evolving_surface>/cpp/build-cpu/static_dump test/fixtures/static-cpu-L12 12 2 26 64 0.01 2 1 2
 ```
 
+```bash
+<evolving_surface>/cpp/build-cpu/step_dump test/fixtures/killing-cpu-L12 killing 12 2 26 64 0.01 1 2 0 20
+```
+
+```bash
+<evolving_surface>/cpp/build-cpu/step_dump test/fixtures/rotating-perturbed-cpu-L12 killing 12 2 26 64 0.01 1 2 0 20 0.2
+```
+
 ### The page
 
 ```bash
@@ -106,10 +114,30 @@ The matvec compiles to 125 GPU operations: 18 syntheses and 15 analyses (batched
 | preconditioned operator on a random vector, against the C++ cpu backend in f64 (static_stokes, band 12, product 24 on 26 x 64), rel L2 | 5.1e-7 |
 | preconditioned right-hand side, same, rel L2 | 2.5e-7 |
 | one step's velocity, against the C++ solved to 1e-12, rel L2 | 1.8e-5 (7 GMRES iterations) |
-| degree-2 toroidal flow on the unit sphere, band 16, dt 0.01, 100 steps: fitted decay rate against BDF-1's exact ln(1 + 4 dt)/dt | 3.9220733 vs 3.9220713, relative error 5.0e-7 (9.1 iterations per step) |
+| degree-2 toroidal flow on the unit sphere, band 16, dt 0.01, 100 steps: fitted decay rate against BDF-1's exact ln(1 + 4 dt)/dt | 3.9220722 vs 3.9220713, relative error 2.3e-7 (6.2 iterations per step) |
 | degree 1, the Killing field (rigid rotation): fitted decay rate | -4.8e-9 |
 
-The one-step difference is set by GMRES's tolerance. GMRES on an fp32 operator cannot go much below 1e-6: at tol 1e-7 the step agrees with the C++ to 2.4e-6, but the true residual stalls near 6.5e-7 and GMRES does not converge. The C++ solver's fp32 builds raise their tolerance to the same floor (`FLUID_FP32_TOL_FLOOR`). A step takes about 56 ms at band 16 in node, most of it the per-iteration synchronization of the host GMRES.
+The one-step difference is set by GMRES's tolerance. GMRES on an fp32 operator cannot go much below 1e-6: at tol 1e-7 the step agrees with the C++ to 2.4e-6, but the true residual stalls near 6.5e-7 and GMRES does not converge. The C++ solver's fp32 builds raise their tolerance to the same floor (`FLUID_FP32_TOL_FLOOR`). A step takes about 33 ms at band 16 in node, most of it the per-iteration synchronization of the host GMRES.
+
+## A moving surface, without bending
+
+[`models/stokes.m`](models/stokes.m) is the C++ solver's step on a moving surface with bending off and no volume constraint: the same momentum as the static mode without its projection, the Stokes preconditioner (the same system on the sphere of the same area, solved exactly degree by degree), and `advance`, which moves the surface with the normal part of the new velocity. [`src/fluid/movingStokes.ts`](src/fluid/movingStokes.ts) runs the step; the position stays on the GPU, written back by `advance` into the buffers `lib/geometry.m` reads.
+
+The preconditioner works on the radial, spheroidal and toroidal potentials Q, S, T of the velocity. The C++ converts to and from them with recurrences on the coefficients for multiplication by x, y and z, which couple degree l to l +- 1 and order m to m +- 1, a shuffle numbl has no operation for. [`lib/cart2qst.m`](lib/cart2qst.m) and [`lib/qst2cart.m`](lib/qst2cart.m) do it on the grid instead: Q is the radial component r . u, and S, T are the vector analysis of step 1 applied to the tangential part. The products are exact on the product grid, so the two agree to rounding; the trade-off is cost, 37 GPU operations per round trip, 10 of them transforms, where the C++ needs none. The 3 x 3 block of each degree is inverted on the host in f64, as the C++ builds its blocks on the host, and the per-degree solve is a 3 x 3 product in `models/stokes.m`.
+
+The matvec compiles to 149 GPU operations. Checks against the C++ cpu backend in f64 (band 12, product 24 on 26 x 64, dt 0.01, Re 1, no bending), GMRES at tol 1e-6, relative L2:
+
+| check | result |
+|---|---|
+| Cartesian to Q, S, T on a random field, and back | Q 1.9e-7, S 1.2e-7, T 1.9e-7; back 5.1e-7 |
+| killing example (the unit sphere in rigid rotation): operator on a random vector, right-hand side | 5.1e-6, 3.0e-7 |
+| killing example after 1 and after 20 steps | X 8.2e-8 and 6.0e-8, u 1.7e-7 and 4.6e-7, p 1.5e-6 and 4.0e-6 (3.0 GMRES iterations per step) |
+| the same rotation started on the perturbed sphere (r0 0.2): operator, right-hand side | 1.8e-6, 3.1e-7 |
+| rotating perturbed sphere after 1 and after 20 steps | X 6.5e-9 and 1.4e-7, u 2.7e-7 and 1.7e-6, p 2.9e-6 and 4.9e-6 (9.6 iterations per step) |
+
+Over the 20 steps the rotating perturbed sphere's position changes by 1.8% and the rotating sphere's by 0.7%: without bending nothing holds the sphere's shape against the rotation, in the C++ as here. A step takes 17 to 34 ms at band 12 in node.
+
+GMRES stops, as the C++'s does, when its own residual estimate reaches the tolerance; the explicit residual is computed once at the end and reported.
 
 ## Where numbl needed help
 
@@ -125,6 +153,7 @@ This list records each place the MATLAB could not say what was meant, or the com
 - **`max(tensor, scalar)`** (step 3) is not supported by numbl's lowering yet. The one use was a no-op and was dropped.
 - **Reductions are statements.** `dot` must be its own statement on named arrays; `dot(a, w) / dot(b, w)` in one line does not compile, since the planner sees the grid-sized arguments inside a scalar kernel.
 - **One band per function.** A function runs on one grid and one band. Keeping every spectral field on the product band, with masks for truncation and filters (see the static mode above), works around it at some cost.
+- **No shifts in the order m** (step 4a). Multiplying by x or y on the sphere couples m to m +- 1, which none of the coefficient shuffles does; the conversion to Q, S, T goes through the grid instead, at the cost of ten transforms.
 - **GMRES is hand-written** (step 3), in TypeScript on the host, because its restarts and convergence test need the host in the loop, which a compiled plan (a fixed list of GPU operations) does not have.
 
 ## Tests
@@ -133,7 +162,7 @@ This list records each place the MATLAB could not say what was meant, or the com
 npm run test:node
 ```
 
-Runs [`test/sphtorChecks.ts`](test/sphtorChecks.ts), [`test/geometryChecks.ts`](test/geometryChecks.ts) and [`test/stokesChecks.ts`](test/stokesChecks.ts) (`-- --only=stokes` for one) on desktop WebGPU (Google Dawn, the optional `webgpu` package). The SHTns results it compares against are in [`test/fixtures/`](test/fixtures/), written by [`scripts/shtns_sphtor_fixture.py`](scripts/shtns_sphtor_fixture.py), which needs the `shtns` Python package:
+Runs [`test/sphtorChecks.ts`](test/sphtorChecks.ts), [`test/geometryChecks.ts`](test/geometryChecks.ts), [`test/stokesChecks.ts`](test/stokesChecks.ts) and [`test/movingChecks.ts`](test/movingChecks.ts) (`-- --only=moving` for one) on desktop WebGPU (Google Dawn, the optional `webgpu` package). The SHTns results it compares against are in [`test/fixtures/`](test/fixtures/), written by [`scripts/shtns_sphtor_fixture.py`](scripts/shtns_sphtor_fixture.py), which needs the `shtns` Python package:
 
 ```bash
 python scripts/shtns_sphtor_fixture.py -lmax 16
@@ -144,7 +173,7 @@ python scripts/shtns_sphtor_fixture.py -lmax 16
 - `lib/`: the MATLAB operators, compiled by numbl.
 - `src/sht/`: the WebGPU spherical-harmonic transforms and coefficient shuffles, vendored from [shtns-webgpu](https://github.com/concept-collection/shtns-webgpu) by way of turing-surface, plus `dthetat`. `reference.ts` is the f64 CPU twin used by the tests.
 - `src/mgpu/`: the MATLAB-to-WebGPU pipeline from turing-surface (numbl lowering, planning, WGSL generation). `gpuFunction.ts` compiles one `.m` function into something the host can call.
-- `models/`: one solver mode per file (`static_stokes.m`). `src/fluid/`: the host side, GMRES and the steppers.
+- `models/`: one solver mode per file (`static_stokes.m`, `stokes.m`). `src/fluid/`: the host side, GMRES and the steppers.
 - `src/geom/`: the geometry on the GPU and the example surfaces. `src/render/`, `src/main.ts`, `index.html`: the page.
 - `test/`, `scripts/`: the checks and their runner; `scripts/cpp/` holds the tool that writes the C++ reference.
 

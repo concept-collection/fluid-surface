@@ -42,6 +42,18 @@ export function gridTrig(cfg: ShtConfig): { ct: Float32Array; st: Float32Array }
   return { ct, st };
 }
 
+/** cos and sin of theta and phi on the grid, for the unit sphere's frame. */
+export function gridFrame(cfg: ShtConfig): { ct: Float32Array; st: Float32Array; cp: Float32Array; sp: Float32Array } {
+  const { ct, st } = gridTrig(cfg);
+  const cp = new Float32Array(cfg.nlat * cfg.nphi);
+  const sp = new Float32Array(cfg.nlat * cfg.nphi);
+  forGrid(cfg, (_i, phi, k) => {
+    cp[k] = Math.cos(phi);
+    sp[k] = Math.sin(phi);
+  });
+  return { ct, st, cp, sp };
+}
+
 /**
  * Grid fields on the product grid as coefficients, as the C++ solver makes
  * them (core/fluid_examples.cpp GridToCoeffs): analysed in f64, truncated to

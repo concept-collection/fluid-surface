@@ -20,6 +20,10 @@ export interface SpectralMasks {
   filtf: Float32Array;
   /** 1 at the real part of l = m = 0. */
   e0: Float32Array;
+  /** 1/(l(l+1)), 0 at l = 0. */
+  ilam: Float32Array;
+  /** As keep, without the working band's top two degrees (l < lmax - 1). */
+  cutv: Float32Array;
 }
 
 export function spectralMasks(cfg: ShtConfig, lmax: number): SpectralMasks {
@@ -30,6 +34,8 @@ export function spectralMasks(cfg: ShtConfig, lmax: number): SpectralMasks {
     clean: new Float32Array(n),
     filtf: new Float32Array(n),
     e0: new Float32Array(n),
+    ilam: new Float32Array(n),
+    cutv: new Float32Array(n),
   };
   for (let m = 0; m <= cfg.mmax; m++) {
     for (let l = m; l <= cfg.lmax; l++) {
@@ -40,10 +46,24 @@ export function spectralMasks(cfg: ShtConfig, lmax: number): SpectralMasks {
         out.keep[k] = l <= lmax && realPart ? 1 : 0;
         out.clean[k] = l < lmax - 2 && realPart ? 1 : 0;
         out.filtf[k] = l < cfg.lmax - 2 ? 1 : 0;
+        out.ilam[k] = l > 0 ? 1 / (l * (l + 1)) : 0;
+        out.cutv[k] = l < lmax - 1 && realPart ? 1 : 0;
       }
     }
   }
   out.e0[0] = 1;
+  return out;
+}
+
+/** A per-degree table (index l) spread over the 2 x nlm layout. */
+export function byDegree(cfg: ShtConfig, table: (l: number) => number): Float32Array {
+  const out = new Float32Array(2 * nlmCalc(cfg.lmax, cfg.mmax));
+  for (let m = 0; m <= cfg.mmax; m++) {
+    for (let l = m; l <= cfg.lmax; l++) {
+      const i = 2 * lmIndex(cfg.lmax, l, m);
+      out[i] = out[i + 1] = table(l);
+    }
+  }
   return out;
 }
 

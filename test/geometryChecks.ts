@@ -9,7 +9,7 @@
  *    (test/fixtures/geometry-cpu-perturbed-L12, written by
  *    scripts/cpp/geometry_dump.cpp).
  */
-import { readFileSync } from 'node:fs';
+import { readDump } from './dump.ts';
 import { ShtReference } from '../src/sht/reference.ts';
 import { gridForLmax, relayoutCoeffs, type ShtConfig } from '../src/sht/layout.ts';
 import { gaussNodesWeights } from '../src/sht/gauss.ts';
@@ -31,19 +31,6 @@ async function compileGeometry(device: GPUDevice, cfg: ShtConfig) {
 }
 
 /** A ref_dump directory (the C++ solver's format): a manifest of f64 arrays. */
-function readDump(dir: URL): { scalars: Record<string, number>; arrays: Record<string, Float64Array> } {
-  const scalars: Record<string, number> = {};
-  const arrays: Record<string, Float64Array> = {};
-  for (const line of readFileSync(new URL('manifest.txt', dir), 'utf8').split('\n')) {
-    const f = line.trim().split(/\s+/);
-    if (f[0] === 'scalar') scalars[f[1]] = Number(f[2]);
-    if (f[0] === 'array') {
-      const buf = readFileSync(new URL(`${f[1]}.bin`, dir));
-      arrays[f[1]] = new Float64Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
-    }
-  }
-  return { scalars, arrays };
-}
 
 export async function geometryChecks(device: GPUDevice, check: Check, log: Log): Promise<void> {
   // ---- 1. the unit sphere ---------------------------------------------------

@@ -10,26 +10,13 @@
  *    BDF-1 makes that ln(1 + rate dt) / dt; the fitted rate must match it.
  *    Degree 1, the Killing field, must not decay.
  */
-import { readFileSync } from 'node:fs';
+import { readDump } from './dump.ts';
 import { relayoutCoeffs } from '../src/sht/layout.ts';
 import { StaticStokes } from '../src/fluid/staticStokes.ts';
 import { staticStokes } from '../src/fluid/examples.ts';
 import { unpackCpp } from '../src/fluid/spectra.ts';
 import { relL2, fmt, type Check, type Log } from './check.ts';
 
-function readDump(dir: URL): { scalars: Record<string, number>; arrays: Record<string, Float64Array> } {
-  const scalars: Record<string, number> = {};
-  const arrays: Record<string, Float64Array> = {};
-  for (const line of readFileSync(new URL('manifest.txt', dir), 'utf8').split('\n')) {
-    const f = line.trim().split(/\s+/);
-    if (f[0] === 'scalar') scalars[f[1]] = Number(f[2]);
-    if (f[0] === 'array') {
-      const buf = readFileSync(new URL(`${f[1]}.bin`, dir));
-      arrays[f[1]] = new Float64Array(buf.buffer.slice(buf.byteOffset, buf.byteOffset + buf.byteLength));
-    }
-  }
-  return { scalars, arrays };
-}
 
 /** GMRES at the fp32 floor, as the C++ solver's fp32 builds use it
  *  (FLUID_FP32_TOL_FLOOR): below about 7e-7 the true residual stalls. */

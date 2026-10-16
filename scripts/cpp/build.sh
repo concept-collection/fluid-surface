@@ -1,5 +1,5 @@
 #!/bin/sh
-# Builds the dump tools (geometry_dump, static_dump) against a configured and built cpu tree of
+# Builds the dump tools (geometry_dump, static_dump, step_dump) against a configured and built cpu tree of
 # meliao/evolving_surface (PR #10), e.g.
 #   cmake -S cpp -B cpp/build-cpu -DES_CPU_PETSC=OFF -DES_BUILD_TESTS=OFF
 #   cmake --build cpp/build-cpu -j
@@ -12,7 +12,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 FLAGS=$(sed -n 's/^CXX_\(DEFINES\|INCLUDES\|FLAGS\) = //p' "$BUILD/CMakeFiles/fluid_killing.dir/flags.make" | tr '\n' ' ')
 LINK=$(sed 's/^[^ ]* .*-o fluid_killing //' "$BUILD/CMakeFiles/fluid_killing.dir/link.txt")
 cd "$BUILD"
-for t in geometry_dump static_dump; do
+for t in geometry_dump static_dump step_dump; do
   c++ $FLAGS -c "$HERE/$t.cpp" -o $t.o
   c++ -O3 $t.o -o $t $LINK
   echo "built $BUILD/$t"

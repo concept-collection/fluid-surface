@@ -1,0 +1,26 @@
+scalar lmax 12
+scalar lmax_f 24
+scalar nlat_f 26
+scalar nphi_f 64
+scalar dt 0.01
+scalar re 1
+scalar be 2
+scalar bending 0
+scalar nsteps 20
+scalar area 12.56637061435916
+scalar iterations1 5
+scalar iterations_mean 5.0999999999999996
+array cart complex128 273 3,91
+array qst complex128 273 3,91
+array cart_back complex128 273 3,91
+array z float64 676 676
+array Az float64 676 676
+array b float64 676 676
+array X0 complex128 273 3,91
+array u0 complex128 273 3,91
+array X1 complex128 273 3,91
+array u1 complex128 273 3,91
+array p1 complex128 91 91
+array XN complex128 273 3,91
+array uN complex128 273 3,91
+array pN complex128 91 91
